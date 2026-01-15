@@ -1,0 +1,210 @@
+app:
+  description: GuardDutyのFindingを解説していい感じにアウトプットします
+  icon: "\U0001F916"
+  icon_background: '#FFEAD5'
+  mode: workflow
+  name: GuardDutyHandler
+kind: app
+version: 0.1.0
+workflow:
+  environment_variables: []
+  features:
+    file_upload:
+      image:
+        enabled: false
+    retriever_resource:
+      enabled: true
+  graph:
+    edges:
+    - data:
+        sourceType: start
+        targetType: question-classifier
+      id: 1722391426202-source-1722397570856-target
+      source: '1722391426202'
+      sourceHandle: source
+      target: '1722397570856'
+      targetHandle: target
+      type: custom
+    - data:
+        sourceType: question-classifier
+        targetType: knowledge-retrieval
+      id: 1722397570856-1-1722397470145-target
+      source: '1722397570856'
+      sourceHandle: '1'
+      target: '1722397470145'
+      targetHandle: target
+      type: custom
+    - data:
+        sourceType: knowledge-retrieval
+        targetType: llm
+      id: 1722397470145-source-1722398149172-target
+      source: '1722397470145'
+      sourceHandle: source
+      target: '1722398149172'
+      targetHandle: target
+      type: custom
+    - data:
+        sourceType: llm
+        targetType: tool
+      id: 1722398149172-source-1722398839249-target
+      source: '1722398149172'
+      sourceHandle: source
+      target: '1722398839249'
+      targetHandle: target
+      type: custom
+    - data:
+        sourceType: tool
+        targetType: end
+      id: 1722398839249-source-1722399235845-target
+      source: '1722398839249'
+      sourceHandle: source
+      target: '1722399235845'
+      targetHandle: target
+      type: custom
+    - data:
+        sourceType: question-classifier
+        targetType: end
+      id: 1722397570856-1722398080959-1722399356175-target
+      source: '1722397570856'
+      sourceHandle: '1722398080959'
+      target: '1722399356175'
+      targetHandle: target
+      type: custom
+    nodes:
+    - data:
+        desc: GuardDutyのFindingを受け取る
+        title: 開始
+        type: start
+        variables:
+        - label: finding
+          required: true
+          type: paragraph
+          variable: finding
+        - label: type
+          required: true
+          type: text-input
+          variable: type
+        - label: severity
+          required: true
+          type: number
+          variable: severity
+      id: '1722391426202'
+      position:
+        x: 80
+        y: 282
+      type: custom
+    - data:
+        dataset_ids:
+        - a6d5e1e3-28c6-417c-aad8-6f2e3bfc7fd1
+        desc: ドキュメントを検索
+        query_variable_selector:
+        - '1722391426202'
+        - finding
+        retrieval_mode: single
+        title: 知識取得
+        type: knowledge-retrieval
+      id: '1722397470145'
+      position:
+        x: 726
+        y: 175
+      type: custom
+    - data:
+        classes:
+        - id: '1'
+          name: IAMまたはEC2関連のFinding
+        - id: '1722398080959'
+          name: その他
+        desc: Findingの分類
+        instruction: 以下のGuardDutyのFindingを受信しました。typeパラメータから
+        model:
+          mode: chat
+          name: anthropic.claude-3-5-sonnet-20240620-v1:0
+          provider: bedrock
+        query_variable_selector:
+        - '1722391426202'
+        - type
+        title: 質問分類器
+        type: question-classifier
+      id: '1722397570856'
+      position:
+        x: 396
+        y: 282
+      type: custom
+    - data:
+        context:
+          enabled: true
+          variable_selector:
+          - '1722397470145'
+          - result
+        desc: LLMで要約を生成
+        model:
+          mode: chat
+          name: anthropic.claude-3-5-sonnet-20240620-v1:0
+          provider: bedrock
+        prompt_template:
+        - id: 4c201608-abba-4a6d-9986-27a125e416a6
+          role: system
+          text: あなたはクラウドセキュリティのプロフェッショナルです。
+        - id: 634daf7d-518c-4081-8d06-8fea26237bc2
+          role: user
+          text: |
+            以下のGuardDutyのFindingを検知しました。
+
+            ### type
+            {{#1722391426202.type#}}
+
+            ### 重大度
+            {{#1722391426202.severity#}}
+
+            ### findingの詳細
+            {{#1722391426202.finding#}}
+
+            ドキュメントを参考に、検知したFindingの解説を生成してください。
+
+            ### ドキュメント
+            {{#context#}}
+        title: LLM
+        type: llm
+        variables: []
+      id: '1722398149172'
+      position:
+        x: 1040
+        y: 175
+      type: custom
+    - data:
+        desc: Slack送信
+        provider_id: slack
+        provider_name: slack
+        provider_type: builtin
+        title: Incoming Webhook to send message
+        tool_name: slack_webhook
+        tool_parameters:
+          content:
+            type: mixed
+            value: '{{#1722398149172.text#}}'
+        type: tool
+      id: '1722398839249'
+      position:
+        x: 1326
+        y: 175
+      type: custom
+    - data:
+        desc: ''
+        outputs: []
+        title: 終了
+        type: end
+      id: '1722399235845'
+      position:
+        x: 1613
+        y: 175
+      type: custom
+    - data:
+        desc: ''
+        outputs: []
+        title: 終了 2
+        type: end
+      id: '1722399356175'
+      position:
+        x: 733
+        y: 503
+      type: custom
