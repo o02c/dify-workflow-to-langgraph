@@ -609,6 +609,11 @@ def main() -> int:
         default="gpt-4o-mini",
         help="LLM model for node naming (default: gpt-4o-mini)",
     )
+    arg_parser.add_argument(
+        "--skip-implement",
+        action="store_true",
+        help="Skip LLM-based node implementation generation (only generate templates)",
+    )
 
     args = arg_parser.parse_args()
 
@@ -625,16 +630,20 @@ def main() -> int:
         dsl_parser = DifyDSLParser()
         graph = dsl_parser.parse_file(args.input)
 
-        # Generate node names if requested
-        node_name_map: dict[str, tuple[str, str]] | None = None
-        if args.name_nodes:
-            print("Generating node names using LLM...")
+        # Create engine if needed for naming or implementation
+        engine = None
+        if args.name_nodes or not args.skip_implement:
             from generator import CodeGenerationEngine
 
             engine = CodeGenerationEngine.from_config(
                 args.llm_provider,
                 args.llm_model,
             )
+
+        # Generate node names if requested
+        node_name_map: dict[str, tuple[str, str]] | None = None
+        if args.name_nodes and engine:
+            print("Generating node names using LLM...")
             nodes_info = [
                 {"id": n.id, "title": n.title, "type": n.type}
                 for n in graph.nodes.values()
@@ -647,6 +656,15 @@ def main() -> int:
             print(f"Generated {len(node_name_map)} node names")
 
         translate(args.input, output_dir, node_name_map)
+
+        # Generate node implementations unless skipped
+        if not args.skip_implement:
+            print("Generating node implementations using LLM...")
+            nodes_dir = output_dir / "nodes"
+            assert engine is not None
+            implementations = engine.generate_all_nodes(nodes_dir)
+            print(f"Generated {len(implementations)} node implementations")
+
         return 0
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
