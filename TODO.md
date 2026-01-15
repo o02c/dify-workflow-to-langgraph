@@ -2,27 +2,22 @@
 
 ## High Priority
 
-- [ ] ノード名の命名規則を改善
-  - 現状: 数字IDに`node_`プレフィックスを付与 (例: `node_1722391426202`)
-  - 改善: Difyのノードtitleからsnake_case/CamelCaseを生成
-  - 例: `知識取得` → `knowledge_retrieval` / `KnowledgeRetrieval`
-
 - [ ] 条件分岐エッジの実装
-  - 現状: `add_edge`で単純な接続のみ
+  - 現状: `add_edge`で単純な接続のみ（分岐ノードで重複エッジ）
   - 改善: `add_conditional_edges`を使った分岐ロジック生成
   - if-else, question-classifierノードの分岐に対応
+  - 分岐の可視性向上のためgraph.py側で制御
 
 ## Medium Priority
 
-- [ ] ノード実装の自動生成 (generator/engine.py)
-  - Bedrock (Claude) を使ったコード生成エンジン
+- [ ] `--implement-nodes` CLIオプション追加
+  - 生成済みノードファイルのTODOをLLMで実装
   - NODE_CONFIGを入力としてノードロジックを生成
-  - LLMノード: プロンプトテンプレート展開 + Bedrock呼び出し
-  - knowledge-retrievalノード: PGVector検索ロジック
 
-- [ ] 変数参照のstate_accessをサニタイズ済みキーに対応
-  - 現状: `state["1722391426202"]["field"]` (元のID)
-  - 改善: `state["node_1722391426202"]["field"]` (サニタイズ済み)
+- [ ] ノード実装の自動生成改善 (generator/engine.py)
+  - LLMノード: LangChain ChatModel経由 (`from llm import get_chat_model`)
+  - knowledge-retrievalノード: 共有retriever経由 (`from retriever import get_retriever`)
+  - 共有モジュール（llm.py, retriever.py）のテンプレート生成
 
 - [ ] テスト拡充
   - より多くのDify DSLサンプルでのテスト
@@ -53,3 +48,10 @@
 - [x] NODE_CONFIGにDify設定を含める
 - [x] ruff + ty でのlint対応
 - [x] Commandを使った戻り値
+- [x] `--name-nodes`オプション: LLMでノード名生成
+  - 日本語タイトル→英語snake_case/CamelCase変換
+  - 例: `知識取得` → `retrieve_knowledge` / `RetrieveKnowledge`
+- [x] state keyをLLM生成名に統一
+  - `state["retrieve_knowledge"]["result"]` 形式で参照
+- [x] LLMプロバイダー抽象化 (OpenAI, Anthropic, Bedrock対応)
+- [x] コード生成プロンプト改善 (LangChain抽象使用)
