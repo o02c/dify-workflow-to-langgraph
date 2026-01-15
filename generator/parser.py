@@ -50,8 +50,14 @@ class VariableReference:
         parts = reference.split(".")
         return cls(raw=reference, node_id=parts[0], field_path=parts[1:])
 
-    def to_state_access(self) -> str:
+    def to_state_access(
+        self,
+        node_name_map: dict[str, tuple[str, str]] | None = None,
+    ) -> str:
         """Convert to Python state dictionary access.
+
+        Args:
+            node_name_map: Optional mapping of node_id -> (snake_case, CamelCase).
 
         Returns:
             Python code string for accessing the state.
@@ -61,7 +67,13 @@ class VariableReference:
             >>> ref.to_state_access()
             'state["llm_node"]["text"]'
         """
-        access = f'state["{self.node_id}"]'
+        # Use mapped name if available
+        if node_name_map and self.node_id in node_name_map:
+            state_key = node_name_map[self.node_id][0]  # snake_case
+        else:
+            state_key = self.node_id
+
+        access = f'state["{state_key}"]'
         for part in self.field_path:
             access += f'["{part}"]'
         return access
@@ -316,11 +328,15 @@ class DifyDSLParser:
         return result
 
 
-def replace_variable_references(text: str) -> str:
+def replace_variable_references(
+    text: str,
+    node_name_map: dict[str, tuple[str, str]] | None = None,
+) -> str:
     """Replace Dify variable references with Python state access.
 
     Args:
         text: Text containing {{#node_id.field#}} references.
+        node_name_map: Optional mapping of node_id -> (snake_case, CamelCase).
 
     Returns:
         Text with references replaced by state["node_id"]["field"].
@@ -332,6 +348,6 @@ def replace_variable_references(text: str) -> str:
 
     def replacer(match: re.Match) -> str:
         ref = VariableReference.parse(match.group(1))
-        return "{" + ref.to_state_access() + "}"
+        return "{" + ref.to_state_access(node_name_map) + "}"
 
     return VARIABLE_REFERENCE_PATTERN.sub(replacer, text)

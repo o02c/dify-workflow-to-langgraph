@@ -317,7 +317,7 @@ def _generate_node_file(
                 "raw": ref.raw,
                 "node_id": ref.node_id,
                 "field_path": ref.field_path,
-                "state_access": ref.to_state_access(),
+                "state_access": ref.to_state_access(node_name_map),
             }
             for ref in node.references
         ],
@@ -387,7 +387,7 @@ def _generate_node_file(
     if node.references:
         lines.append("    # How to access input variables:")
         for ref in node.references:
-            lines.append(f"    # {ref.raw} -> {ref.to_state_access()}")
+            lines.append(f"    # {ref.raw} -> {ref.to_state_access(node_name_map)}")
         lines.append("")
 
     # Generate placeholder with proper output structure
