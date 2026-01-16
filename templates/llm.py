@@ -12,8 +12,8 @@ from langchain_core.language_models import BaseChatModel
 load_dotenv(find_dotenv())
 
 # Default configuration
-DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
-DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "google")
+DEFAULT_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 
 
 def get_chat_model(
@@ -24,7 +24,7 @@ def get_chat_model(
     """Get a configured chat model instance.
 
     Args:
-        provider: LLM provider (openai, anthropic, bedrock). Defaults to LLM_PROVIDER env var.
+        provider: LLM provider (google, openai, anthropic, deepseek, bedrock). Defaults to LLM_PROVIDER env var.
         model: Model name. Defaults to LLM_MODEL env var.
         **kwargs: Additional arguments passed to the model constructor.
 
@@ -32,14 +32,21 @@ def get_chat_model(
         Configured LangChain chat model.
 
     Examples:
-        >>> llm = get_chat_model()  # Uses defaults from env
+        >>> llm = get_chat_model()  # Uses defaults from env (gemini-2.5-flash)
+        >>> llm = get_chat_model("openai", "gpt-4o-mini")
+        >>> llm = get_chat_model("deepseek", "deepseek-chat")
         >>> llm = get_chat_model("anthropic", "claude-3-5-sonnet-20241022")
         >>> llm = get_chat_model("bedrock", "anthropic.claude-3-5-sonnet-20240620-v1:0")
     """
     provider = provider or DEFAULT_PROVIDER
     model = model or DEFAULT_MODEL
 
-    if provider == "openai":
+    if provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(model=model, **kwargs)
+
+    elif provider == "openai":
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(model=model, **kwargs)
@@ -48,6 +55,16 @@ def get_chat_model(
         from langchain_anthropic import ChatAnthropic
 
         return ChatAnthropic(model=model, **kwargs)
+
+    elif provider == "deepseek":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            model=model,
+            base_url="https://api.deepseek.com",
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            **kwargs,
+        )
 
     elif provider == "bedrock":
         from langchain_aws import ChatBedrock
