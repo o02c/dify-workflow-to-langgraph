@@ -83,9 +83,10 @@ NODE_IMPLEMENTATION_PROMPT = """Implement the following LangGraph node function.
 
 ## Requirements
 1. Replace the TODO placeholder with actual implementation
-2. Access input variables as shown in the comments
-3. Return the output matching the TypedDict structure
-4. Keep sys.path.insert BEFORE local imports (state, etc.)
+2. Access input variables using state_access from variable_references (already uses correct state keys)
+3. Return Command(update={{state_key: output}}) - use "state_key" from config, NOT "id"
+4. For start nodes: read input from state[state_key] (initial state passed to workflow)
+5. Keep sys.path.insert BEFORE local imports (state, etc.)
 
 ## Node Type Specific Guidelines
 

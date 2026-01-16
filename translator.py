@@ -9,10 +9,14 @@ This module orchestrates the conversion process:
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
 from generator.parser import DifyDSLParser, WorkflowGraph
+
+# Templates directory (relative to this file)
+TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
 def _sanitize_function_name(node_id: str) -> str:
@@ -309,6 +313,7 @@ def _generate_node_file(
     output_fields = _get_node_output_fields(node)
     node_config = {
         "id": node.id,
+        "state_key": func_name,  # LLM-generated name used as state key
         "type": node.type,
         "title": node.title,
         "dependencies": sorted(node.dependencies),
@@ -345,12 +350,8 @@ def _generate_node_file(
         "",
         f"from state import GraphState, {class_name}",
         "",
-        "# Full node configuration from Dify DSL (as JSON string)",
-        "# Parse with: config = json.loads(NODE_CONFIG_JSON)",
+        "# Full node configuration from Dify DSL (for reference)",
         f"NODE_CONFIG_JSON = '''{config_json}'''",
-        "",
-        "# Parsed config for convenience",
-        "NODE_CONFIG = json.loads(NODE_CONFIG_JSON)",
         "",
         "",
         f"def {func_name}(state: GraphState) -> Command:",
@@ -513,12 +514,14 @@ def generate_graph_file(
                 f'({edge.source_handle}) -> {target_func}'
             )
 
-        if edge.target_node_id in graph.end_node_ids:
-            lines.append(f'    graph.add_edge("{source_func}", END)')
-        else:
-            lines.append(
-                f'    graph.add_edge("{source_func}", "{target_func}")'
-            )
+        lines.append(
+            f'    graph.add_edge("{source_func}", "{target_func}")'
+        )
+
+    # Add edges from end nodes to END
+    for end_node_id in graph.end_node_ids:
+        end_func, _ = _get_node_names(end_node_id, node_name_map)
+        lines.append(f'    graph.add_edge("{end_func}", END)')
 
     # Use start node's name for example input
     start_func, _ = _get_node_names(graph.start_node_id, node_name_map) if graph.start_node_id else ("start", "")
@@ -572,7 +575,25 @@ def translate(
     generate_nodes_directory(graph, output_dir, node_name_map)
     generate_graph_file(graph, output_dir, node_name_map)
 
+    # Copy template files
+    copy_templates(output_dir)
+
     print(f"\nGeneration complete. Output directory: {output_dir}")
+
+
+def copy_templates(output_dir: Path) -> None:
+    """Copy template files to output directory.
+
+    Args:
+        output_dir: Directory to copy templates to.
+    """
+    if not TEMPLATES_DIR.exists():
+        return
+
+    for template_file in TEMPLATES_DIR.glob("*.py"):
+        dest = output_dir / template_file.name
+        shutil.copy(template_file, dest)
+        print(f"Copied: {dest}")
 
 
 def main() -> int:

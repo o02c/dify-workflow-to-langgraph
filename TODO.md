@@ -10,9 +10,10 @@
 
 ## Medium Priority
 
-- [ ] `--implement-nodes` CLIオプション追加
-  - 生成済みノードファイルのTODOをLLMで実装
-  - NODE_CONFIGを入力としてノードロジックを生成
+- [ ] ノード実装生成の並列化
+  - 現状: 直列処理で時間がかかる
+  - 改善: LangChain best practice に従って並列化
+  - `batch()` または `ainvoke()` + `asyncio.gather()` を使用
 
 - [ ] ノード実装の自動生成改善 (generator/engine.py)
   - LLMノード: LangChain ChatModel経由 (`from llm import get_chat_model`)
