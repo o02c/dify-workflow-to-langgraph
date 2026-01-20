@@ -3,13 +3,22 @@
 This subgraph implements a lint → fix → verify loop using LangGraph.
 """
 
+import hashlib
 from pathlib import Path
-from typing import Annotated, TypedDict
+from typing import TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from agents.linter import LintResult, run_ruff, run_ty
+
+
+class ChangeRecord(TypedDict):
+    """Record of a single code change."""
+
+    iteration: int
+    content_hash: str  # Hash of file content for quick comparison
+    error_count: int
 
 
 class CodingState(TypedDict):
@@ -22,6 +31,7 @@ class CodingState(TypedDict):
     iteration: int
     max_iterations: int
     fixed: bool
+    changes: list[ChangeRecord]  # History of changes for loop detection
 
 
 CODING_SYSTEM_PROMPT = """You are an expert Python developer who fixes lint errors.
@@ -35,20 +45,47 @@ Be precise and minimal. Only fix what's needed to resolve lint errors.
 """
 
 
+def _content_hash(content: str) -> str:
+    """Generate a hash of file content for comparison."""
+    return hashlib.md5(content.encode()).hexdigest()
+
+
 def lint_node(state: CodingState) -> dict:
     """Run linters on the file."""
     file_path = state["file_path"]
+    content = Path(file_path).read_text()
 
     results = []
     results.append(run_ruff(file_path))
     results.append(run_ty(file_path))
 
     all_passed = all(r.success for r in results)
+    error_count = sum(len(r.errors) if r.errors else (0 if r.success else 1) for r in results)
+
+    # Record this state for loop detection
+    change_record: ChangeRecord = {
+        "iteration": state["iteration"],
+        "content_hash": _content_hash(content),
+        "error_count": error_count,
+    }
 
     return {
         "lint_results": results,
         "fixed": all_passed,
+        "file_content": content,
+        "changes": state["changes"] + [change_record],
     }
+
+
+def _is_looping(changes: list[ChangeRecord]) -> bool:
+    """Detect if we're in a loop (same content hash seen before)."""
+    if len(changes) < 2:
+        return False
+
+    current_hash = changes[-1]["content_hash"]
+    previous_hashes = [c["content_hash"] for c in changes[:-1]]
+
+    return current_hash in previous_hashes
 
 
 def should_fix(state: CodingState) -> str:
@@ -56,6 +93,10 @@ def should_fix(state: CodingState) -> str:
     if state["fixed"]:
         return "done"
     if state["iteration"] >= state["max_iterations"]:
+        return "done"
+    # Detect infinite loop: same content appeared before
+    if _is_looping(state["changes"]):
+        print(f"  Loop detected at iteration {state['iteration']}, stopping.")
         return "done"
     return "fix"
 
@@ -181,6 +222,7 @@ def fix_file(
         "iteration": 0,
         "max_iterations": max_iterations,
         "fixed": False,
+        "changes": [],
     }
 
     return graph.invoke(initial_state)
