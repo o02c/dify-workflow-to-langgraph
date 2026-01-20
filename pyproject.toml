@@ -29,3 +29,11 @@ dev = [
     "ruff>=0.14.11",
     "ty>=0.0.10",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]  # Allow longer lines in generated code

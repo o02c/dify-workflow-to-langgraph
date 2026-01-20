@@ -635,6 +635,16 @@ def main() -> int:
         action="store_true",
         help="Skip LLM-based node implementation generation (only generate templates)",
     )
+    arg_parser.add_argument(
+        "--lint",
+        action="store_true",
+        help="Run linters (ruff, ty) on generated code",
+    )
+    arg_parser.add_argument(
+        "--auto-fix",
+        action="store_true",
+        help="Use coding agent to automatically fix lint errors",
+    )
 
     args = arg_parser.parse_args()
 
@@ -685,6 +695,33 @@ def main() -> int:
             assert engine is not None
             implementations = engine.generate_all_nodes(nodes_dir)
             print(f"Generated {len(implementations)} node implementations")
+
+        # Run linters if requested
+        if args.lint or args.auto_fix:
+            from agents.linter import lint_directory, print_lint_summary
+
+            # First pass: run ruff with --fix for auto-fixable issues
+            if args.auto_fix:
+                print("\nRunning ruff --fix...")
+                lint_directory(output_dir, tools=["ruff"], fix=True)
+
+            print("\nRunning linters...")
+            lint_results = lint_directory(output_dir, tools=["ruff"])
+            all_passed = print_lint_summary(lint_results)
+
+            # Use coding agent for remaining complex issues
+            if args.auto_fix and not all_passed:
+                from agents.coding_graph import fix_directory
+                from templates.llm import get_chat_model
+
+                print("\nRunning coding agent to fix remaining errors...")
+                llm = get_chat_model(args.llm_provider, args.llm_model)
+                fix_directory(output_dir, llm, max_iterations=3)
+
+                # Re-run lint to verify fixes
+                print("\nVerifying fixes...")
+                lint_results = lint_directory(output_dir, tools=["ruff"])
+                print_lint_summary(lint_results)
 
         return 0
     except Exception as e:
