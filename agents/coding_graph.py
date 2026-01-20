@@ -41,7 +41,11 @@ When given code with lint errors:
 2. Fix ONLY the errors - do not change logic or add features
 3. Return the complete fixed code
 
-Be precise and minimal. Only fix what's needed to resolve lint errors.
+IMPORTANT:
+- Be precise and minimal. Only fix what's needed to resolve lint errors.
+- If previous fix attempts are shown, DO NOT revert those changes.
+- Build upon previous fixes, don't undo them.
+- If you see the same error after a fix attempt, try a DIFFERENT approach.
 """
 
 
@@ -119,13 +123,25 @@ def prepare_fix_prompt(state: CodingState) -> dict:
 
     errors_text = "\n".join(error_lines)
 
+    # Format change history for context
+    history_text = ""
+    if state["changes"]:
+        history_lines = ["## Previous Fix Attempts:"]
+        for change in state["changes"]:
+            history_lines.append(
+                f"- Iteration {change['iteration']}: {change['error_count']} errors remaining"
+            )
+        history_text = "\n".join(history_lines) + "\n\n"
+
+    iteration = state["iteration"] + 1
     messages = [
         SystemMessage(content=CODING_SYSTEM_PROMPT),
         HumanMessage(content=f"""Fix the following lint errors in this Python file.
 
 ## File: {file_path}
+## Attempt: {iteration}
 
-## Lint Errors:
+{history_text}## Current Lint Errors:
 {errors_text}
 
 ## Current Code:
@@ -133,13 +149,14 @@ def prepare_fix_prompt(state: CodingState) -> dict:
 {content}
 ```
 
-Return ONLY the fixed Python code, no explanations."""),
+Return ONLY the fixed Python code, no explanations.
+DO NOT revert any previous fixes - build upon them."""),
     ]
 
     return {
         "file_content": content,
         "messages": messages,
-        "iteration": state["iteration"] + 1,
+        "iteration": iteration,
     }
 
 
