@@ -1,41 +1,33 @@
 # Project: Dify DSL to LangGraph Converter
 
+> Redesign in progress (2026-08). The canonical glossary is [CONTEXT.md](./CONTEXT.md);
+> the "why" behind each decision lives in [docs/adr/](./docs/adr/). This file is the
+> high-level requirement summary and defers to those for detail.
+
 ## 1. Overview
-Dify (v1.11) のワークフロー DSL (YAML) を解析し、AWS環境で動作する LangGraph プログラムを自動生成する。
+Dify のワークフロー DSL (YAML) を解析し、実行可能で型安全な LangGraph の Python コードを自動生成する。
+変換の中核は**決定論的**で、LLM 支援は任意の後処理（ADR-0001）。
 
 ## 2. Goals
-- Dify のワークフローを Python (LangGraph) コードに変換し、カスタマイズ性を向上させる。
-- Dify が使用している既存の AWS RDS (PGVector) に直接接続し、RAG 機能を維持する。
-- `TypedDict` を活用し、存在しないノード参照を静的に検知（Linter警告）できる型安全なコードを出力する。
+- Dify のワークフロー構造（state / 依存 / エッジ・分岐）を、型安全な LangGraph コードに**決定論的に**変換し、カスタマイズ性を高める。
+- `TypedDict` を活用し、存在しないノード参照を静的に検知（Linter 警告）できる型安全なコードを出力する（ADR-0002）。
+- RAG は Dify の**公開 Retrieval API** 経由で維持し、バックエンドを差し替え可能な `Retriever` ポートの背後に置く（ADR-0006）。
+  - ~~既存の AWS RDS (PGVector) に直接接続する~~ … 要件変更により撤回。ADR-0006 が置換。
 
-## 3. System Architecture
-- **Runtime:** AWS EC2 (Dify と同 VPC 内)
-- **Database:** Dify 用 RDS (PostgreSQL / PGVector)
-- **LLM API:** Amazon Bedrock (Claude 3.5 Sonnet / 3.7)
-- **Libraries:** LangGraph, LangChain, psycopg2-binary, PyYAML, boto3
+## 3. Scope (v1)
+- **構造レイヤー**は全ノードで正しく生成（分岐 `add_conditional_edges` 含む、ADR-0003）。
+- **ノード本体**は `start` / `llm` / `end` / `question-classifier` / `if-else` を実装。他タイプは Stub（ADR-0005）。
+- 未対応・保留は「Deferred」（[TODO.md](./TODO.md)）参照。
 
 ## 4. Implementation Requirements
+決定は ADR に集約。要点のみ:
 
-### 4.1 Dependency Parser
-- YAML 内の `nodes` から全 `id` を抽出する。
-- 各ノード内の `{{#node_id.field#}}` 形式の変数を正規表現で抽出し、ノード間の依存関係を特定する。
+- **Parser**: `nodes` から全 `id` を抽出し、value_selector 配列と `{{#id.field#}}` の両構文からノード間依存を特定（ADR-0004）。
+- **State**: `TypedDict(total=False)` の `GraphState`。正準キーは `node_<dify_node_id>`（ADR-0002）。`sys` は予約キー、`env` は生成 `env.py` の定数（ADR-0004）。
+- **Codegen**: ノードタイプごとの Node Handler が `output_fields` / `generate_body` / `routing` を担う（ADR-0005）。生成物は自己完結パッケージ＋相対 import、1 ノード 1 ファイル既定。
+- **LLM 後処理（任意）**: `# TODO` スタブ本体の LLM 埋め、および lint 自動修正エージェントはオプトイン（ADR-0001）。
 
-### 4.2 State Management Design
-- `TypedDict(total=False)` を用いた `GraphState` を生成する。
-- YAML に存在する全ノード ID をキーとして定義し、Linter が未知のキーへのアクセスを検知できるようにする。
-
-### 4.3 Code Generation logic
-- **state.py:** `GraphState` の定義ファイル。
-- **nodes.py:** 各ノードを関数として定義。Dify の変数参照を `state["node_id"]["field"]` に置換する。
-- **graph.py:** `StateGraph` の構築、エッジ（Conditional含む）の接続、コンパイル処理。
-
-## 5. Directory Structure
-```text
-├── core/
-│   ├── base_state.py      # NodeOutput の基底クラス
-│   └── db_retriever.py    # Dify DB (PGVector) 接続用共通モジュール
-├── generator/
-│   ├── parser.py          # YAML 解析ロジック
-│   └── engine.py          # Bedrock を用いたコード生成エンジン
-├── translator.py          # メイン・エントリポイント
-└── output/                # 生成されたコードの出力先
+## 5. Canonical Layout
+`src/dify2langgraph/` をパッケージ正典とする（旧フラット構成 `translator.py` 等は廃止）。
+生成物は自己完結パッケージ（相対 import・`sys.path` ハック廃止）で、
+`state.py` / `graph.py` / `env.py` / `nodes/<node>.py` / `retriever.py` / `llm.py` を出力する。
