@@ -7,7 +7,10 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from .llm import LLMConfig, LLMProvider, create_provider
+from dify2langgraph.llm import LLMConfig, LLMProvider, create_provider
+from dify2langgraph.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Default model (cheap and capable)
 DEFAULT_PROVIDER = "openai"
@@ -305,7 +308,7 @@ class CodeGenerationEngine:
 
             if not dry_run:
                 node_file.write_text(new_code, encoding="utf-8")
-                print(f"Generated: {node_file}")
+                logger.info("Generated: %s", node_file)
 
         return implementations
 

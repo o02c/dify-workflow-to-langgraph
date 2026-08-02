@@ -3,16 +3,14 @@
 import tempfile
 from pathlib import Path
 
-import pytest
-
-from translator import (
-    _sanitize_function_name,
+from dify2langgraph.cli import translate
+from dify2langgraph.codegen import (
     generate_graph_file,
     generate_nodes_directory,
     generate_state_file,
-    translate,
+    sanitize_function_name,
 )
-from generator.parser import DifyDSLParser
+from dify2langgraph.parser import DifyDSLParser
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -22,23 +20,23 @@ class TestSanitizeFunctionName:
 
     def test_simple_name(self):
         """Test that simple names pass through."""
-        assert _sanitize_function_name("start_node") == "start_node"
+        assert sanitize_function_name("start_node") == "start_node"
 
     def test_hyphen_to_underscore(self):
         """Test that hyphens are converted to underscores."""
-        assert _sanitize_function_name("if-else") == "if_else"
+        assert sanitize_function_name("if-else") == "if_else"
 
     def test_space_to_underscore(self):
         """Test that spaces are converted to underscores."""
-        assert _sanitize_function_name("my node") == "my_node"
+        assert sanitize_function_name("my node") == "my_node"
 
     def test_numeric_prefix(self):
         """Test that numeric prefixes get 'node_' added."""
-        assert _sanitize_function_name("1722391426202") == "node_1722391426202"
+        assert sanitize_function_name("1722391426202") == "node_1722391426202"
 
     def test_already_valid(self):
         """Test that valid names are unchanged."""
-        assert _sanitize_function_name("llm_node") == "llm_node"
+        assert sanitize_function_name("llm_node") == "llm_node"
 
 
 class TestGenerateStateFile:
