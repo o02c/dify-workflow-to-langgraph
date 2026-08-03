@@ -15,8 +15,9 @@ Dify のワークフロー DSL (YAML) を解析し、実行可能で型安全な
   - ~~既存の AWS RDS (PGVector) に直接接続する~~ … 要件変更により撤回。ADR-0006 が置換。
 
 ## 3. Scope (v1)
-- **構造レイヤー**は全ノードで正しく生成（分岐 `add_conditional_edges` 含む、ADR-0003）。
-- **ノード本体**は `start` / `llm` / `end` / `question-classifier` / `if-else` を実装。他タイプは Stub（ADR-0005）。
+- **構造レイヤー**は全ノードで正しく生成することを目標とする。
+  - ⚠️ 分岐（`add_conditional_edges`, ADR-0003）は**未実装**。現状は全分岐を素の `add_edge` で吐くため両分岐が発火するバグがある（`tests/test_generated.py` の strict-xfail で追跡）。v1 の最優先タスク。
+- **ノード本体**は `start` / `llm` / `end` を実装済み。`question-classifier` / `if-else` を含む他タイプは Stub（Handler 化は ADR-0005、未実装）。
 - 未対応・保留は「Deferred」（[TODO.md](./TODO.md)）参照。
 
 ## 4. Implementation Requirements
@@ -29,5 +30,6 @@ Dify のワークフロー DSL (YAML) を解析し、実行可能で型安全な
 
 ## 5. Canonical Layout
 `src/dify2langgraph/` をパッケージ正典とする（旧フラット構成 `translator.py` 等は廃止）。
-生成物は自己完結パッケージ（相対 import・`sys.path` ハック廃止）で、
-`state.py` / `graph.py` / `env.py` / `nodes/<node>.py` / `retriever.py` / `llm.py` を出力する。
+生成物は自己完結パッケージ（相対 import・`sys.path` ハック廃止）を目標とする。
+- 現状出力: `state.py` / `graph.py` / `nodes/<node>.py` / `llm.py`（フラット import・要 `sys.path`）
+- 目標追加: `env.py`（ADR-0004）/ `retriever.py`（ADR-0006）、および相対 import 化（いずれも未実装）

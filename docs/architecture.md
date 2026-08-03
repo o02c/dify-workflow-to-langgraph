@@ -159,9 +159,11 @@ LLM providers are configured via environment variables:
 
 ### Adding New Node Types
 
-1. Add output field definitions in `state_generator.py`
-2. Update node generation template in `node_generator.py`
-3. Add type-specific prompts in `generator/engine.py`
+Target design ([ADR-0005](./adr/0005-node-type-handler-registry.md)): add **one Node Handler**
+for the type, exposing `output_fields()`, `generate_body()`, and `routing()`; unknown types
+fall back to a Stub. As of today this logic is still scattered across `state_generator.py`
+(output fields), `node_generator.py` (body), and `graph_generator.py` (routing) and is being
+migrated to the handler registry — until then, adding a type touches those three generators.
 
 ### Adding New LLM Providers
 
@@ -175,5 +177,6 @@ Tests are organized in `tests/`:
 
 - `conftest.py`: Shared fixtures
 - `test_parser.py`: Parser module tests
-- `test_translator.py`: Code generation tests
+- `test_translator.py`: Code generation tests (source compiles / contains expected strings)
+- `test_generated.py`: End-to-end tests that build and invoke the generated graph in a subprocess
 - `fixtures/`: Test YAML files

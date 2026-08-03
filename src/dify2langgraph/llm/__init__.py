@@ -6,7 +6,7 @@ This module provides a unified interface for multiple LLM providers:
 - Anthropic (Claude via direct API)
 
 Example usage:
-    from generator.llm import create_provider, LLMConfig
+    from dify2langgraph.llm import create_provider, LLMConfig
 
     # Using Bedrock
     config = LLMConfig(model="anthropic.claude-3-5-sonnet-20241022-v2:0")

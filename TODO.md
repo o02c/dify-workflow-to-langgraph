@@ -2,15 +2,15 @@
 
 Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); terms: [CONTEXT.md](./CONTEXT.md).
 
-## Cleanup (整理 PR)
+## Cleanup (整理 PR #4 — 完了)
 
-- [ ] `src/dify2langgraph/` を正典化し、旧フラット構成を削除
-  - 削除: `translator.py`, ルート直下の `generator/` `core/` `agents/` `templates/` `logging_config.py`
-- [ ] 陳腐化ドキュメントの処理
-  - 削除: `docs/migration.md`（v0.1→v0.2 移行、役割終了）
-  - 改訂 or ADR/CONTEXT へ一本化: `docs/architecture.md` `docs/development.md` `docs/STYLE_GUIDE.md`
-- [ ] `outputs/` を `.gitignore`（サンプルを残すなら `examples/` に隔離）、`.DS_Store` 除去
-- [ ] `core/db_retriever.py`（直接 SQL）は ADR-0006 により撤去 or 任意アダプタに縮小
+- [x] `src/dify2langgraph/` を正典化し、旧フラット構成を削除
+  - 削除済: `translator.py`, ルート直下の `generator/` `core/` `agents/` `templates/` `logging_config.py`
+- [x] 陳腐化ドキュメントの処理
+  - 削除済: `docs/migration.md`
+  - 一部改訂済: `docs/architecture.md` `docs/development.md`（ADR/CONTEXT へのポインタ追加）。`STYLE_GUIDE.md` の本格改訂は後続
+- [x] `outputs/` は既に `.gitignore` 済み、`.DS_Store` 除去済
+- [x] `core/db_retriever.py`（直接 SQL）は ADR-0006 により削除（将来アダプタ化は下記 Core 参照）
 
 ## Core (v1, 決定論)
 
