@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from generator.parser import (
+from dify2langgraph.parser import (
     VARIABLE_REFERENCE_PATTERN,
     DifyDSLParser,
     VariableReference,

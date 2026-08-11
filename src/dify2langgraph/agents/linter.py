@@ -5,6 +5,10 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dify2langgraph.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass
 class LintResult:
@@ -131,11 +135,11 @@ def print_lint_summary(results: dict[str, list[LintResult]]) -> bool:
                 all_passed = False
                 error_count = len(result.errors) if result.errors else 1
                 total_errors += error_count
-                print(f"  {result.tool}: {file_path} - {error_count} issue(s)")
+                logger.info("  %s: %s - %d issue(s)", result.tool, file_path, error_count)
 
     if all_passed:
-        print(f"All {len(results)} files passed linting.")
+        logger.info("All %d files passed linting.", len(results))
     else:
-        print(f"Found {total_errors} issue(s) in {len(results)} files.")
+        logger.info("Found %d issue(s) in %d files.", total_errors, len(results))
 
     return all_passed

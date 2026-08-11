@@ -1,403 +1,116 @@
 # Dify DSL to LangGraph Converter
 
-Dify (v1.11) のワークフロー DSL (YAML) を解析し、AWS 環境で動作する LangGraph Python コードを自動生成するツールです。
+Dify のワークフロー DSL (YAML) を解析し、実行可能で型安全な LangGraph Python コードを自動生成するツールです。
 
-## 全体ワークフロー
+変換の中核は**決定論的**（同じ DSL からは常に同じコード）で、LLM による補助（スタブ実装の自動埋め・lint 自動修正・ノード名の意味的リネーム）は**オプトインの後処理**です（[ADR-0001](docs/adr/0001-deterministic-core-llm-as-opt-in-postprocessing.md)）。
 
-```mermaid
-flowchart TB
-    subgraph Input["入力"]
-        DSL[("Dify DSL<br/>(YAML)")]
-    end
+> 用語の正準定義は [CONTEXT.md](CONTEXT.md)、設計判断の経緯は [docs/adr/](docs/adr/)、ロードマップは [TODO.md](TODO.md) を参照。
 
-    subgraph Parser["generator/parser.py"]
-        direction TB
-        P1[YAML読み込み]
-        P2[ノードID抽出]
-        P3["変数参照解析<br/>{{#node.field#}}"]
-        P4[依存関係グラフ構築]
-        P5[トポロジカルソート]
-
-        P1 --> P2 --> P3 --> P4 --> P5
-    end
-
-    subgraph Translator["translator.py"]
-        direction TB
-        T1[WorkflowGraph取得]
-        T2[state.py生成]
-        T3[nodes.py生成]
-        T4[graph.py生成]
-
-        T1 --> T2 --> T3 --> T4
-    end
-
-    subgraph Output["output/"]
-        direction TB
-        S["state.py<br/>(GraphState TypedDict)"]
-        N["nodes.py<br/>(ノード関数群)"]
-        G["graph.py<br/>(StateGraph構築)"]
-    end
-
-    subgraph Runtime["実行時"]
-        direction TB
-        R1[LangGraph実行]
-        R2[("AWS Bedrock<br/>(Claude)")]
-        R3[("Dify RDS<br/>(PGVector)")]
-
-        R1 <--> R2
-        R1 <--> R3
-    end
-
-    DSL --> Parser
-    Parser --> Translator
-    Translator --> Output
-    Output --> Runtime
-
-    style Input fill:#e1f5fe
-    style Parser fill:#fff3e0
-    style Translator fill:#f3e5f5
-    style Output fill:#e8f5e9
-    style Runtime fill:#fce4ec
-```
-
-## システムアーキテクチャ
-
-```mermaid
-graph LR
-    subgraph AWS["AWS Environment"]
-        EC2["EC2<br/>(LangGraph Runtime)"]
-        RDS[("RDS<br/>PostgreSQL + PGVector")]
-        Bedrock["Amazon Bedrock<br/>(Claude 3.5/3.7)"]
-    end
-
-    subgraph Dify["Dify Environment"]
-        DifyApp["Dify App"]
-        DifyDB[("Dify Database")]
-    end
-
-    EC2 -->|"SQL Query"| RDS
-    EC2 -->|"LLM API"| Bedrock
-    DifyDB -.->|"同一DB"| RDS
-
-    style AWS fill:#ff9800,color:#fff
-    style Dify fill:#2196f3,color:#fff
-```
-
-## 機能概要
-
-### 1. DSL パーサー (`generator/parser.py`)
-
-Dify の YAML DSL を解析し、以下の情報を抽出します：
-
-```mermaid
-classDiagram
-    class DifyDSLParser {
-        +parse_file(filepath) WorkflowGraph
-        +parse(dsl_data) WorkflowGraph
-        +extract_all_node_ids(dsl_data) list
-        +get_dependency_order(graph) list
-    }
-
-    class WorkflowGraph {
-        +nodes: dict[str, NodeInfo]
-        +edges: list[EdgeInfo]
-        +start_node_id: str
-        +end_node_ids: list[str]
-    }
-
-    class NodeInfo {
-        +id: str
-        +type: str
-        +title: str
-        +data: dict
-        +references: list[VariableReference]
-        +dependencies: set[str]
-    }
-
-    class VariableReference {
-        +raw: str
-        +node_id: str
-        +field_path: list[str]
-        +parse(reference) VariableReference
-        +to_state_access() str
-    }
-
-    DifyDSLParser --> WorkflowGraph
-    WorkflowGraph --> NodeInfo
-    NodeInfo --> VariableReference
-```
-
-#### 変数参照の変換
-
-Dify の変数参照形式を Python のステート辞書アクセスに変換：
-
-| Dify DSL | Python (LangGraph) |
-|----------|-------------------|
-| `{{#llm_node.text#}}` | `state["llm_node"]["text"]` |
-| `{{#start.inputs.query#}}` | `state["start"]["inputs"]["query"]` |
-| `{{#code_1.result.data#}}` | `state["code_1"]["result"]["data"]` |
-
-### 2. コード生成 (`translator.py`)
-
-パース結果から3つの Python ファイルを生成：
+## 変換パイプライン
 
 ```mermaid
 flowchart LR
-    subgraph Generated["生成ファイル"]
-        state["state.py"]
-        nodes["nodes.py"]
-        graph["graph.py"]
+    DSL[("Dify DSL<br/>(YAML)")] --> Parser
+    subgraph Parser["parser/"]
+        P1[ノード/エッジ抽出] --> P2["変数参照解析<br/>{{#id.field#}} / value_selector"]
     end
-
-    subgraph state_content["state.py の内容"]
-        GS["GraphState(TypedDict)"]
-        GS --> |"キー"| NK["全ノードID"]
-        GS --> |"値"| NV["dict[str, Any]"]
+    Parser --> Codegen
+    subgraph Codegen["codegen/ (決定論)"]
+        C1[state.py] ~~~ C2[nodes/*.py] ~~~ C3[graph.py]
     end
-
-    subgraph nodes_content["nodes.py の内容"]
-        NF["ノード関数群"]
-        NF --> |"引数"| NS["state: GraphState"]
-        NF --> |"戻り値"| NR["GraphState"]
+    Codegen --> Opt
+    subgraph Opt["任意の後処理 (LLM)"]
+        O1[スタブ実装埋め] ~~~ O2[lint 自動修正]
     end
-
-    subgraph graph_content["graph.py の内容"]
-        SG["StateGraph構築"]
-        SG --> AN["add_node()"]
-        SG --> AE["add_edge()"]
-        SG --> CE["conditional_edge()"]
-    end
-
-    state --> state_content
-    nodes --> nodes_content
-    graph --> graph_content
 ```
 
-### 3. ランタイムサポート (`core/`)
+## 生成物の設計
 
-#### base_state.py - ノード出力の型定義
-
-```mermaid
-classDiagram
-    class NodeOutput {
-        +text: str
-        +data: Any
-        +error: str | None
-    }
-
-    class LLMOutput {
-        +usage: dict[str, int]
-    }
-
-    class KnowledgeRetrievalOutput {
-        +records: list[dict]
-        +query: str
-    }
-
-    class CodeOutput {
-        +result: Any
-        +stdout: str
-        +stderr: str
-    }
-
-    class ConditionOutput {
-        +selected_branch: str
-    }
-
-    NodeOutput <|-- LLMOutput
-    NodeOutput <|-- KnowledgeRetrievalOutput
-    NodeOutput <|-- CodeOutput
-    NodeOutput <|-- ConditionOutput
-```
-
-#### db_retriever.py - PGVector 検索
-
-```python
-from core.db_retriever import DifyPGVectorRetriever
-
-with DifyPGVectorRetriever() as retriever:
-    results = retriever.retrieve(
-        query_embedding=embedding_vector,
-        dataset_id="your-dataset-id",
-        top_k=5
-    )
-```
+- **state**: `GraphState(TypedDict, total=False)`。1 ノード = 1 キーで、正準キーは `node_<dify_node_id>`。存在しないノード参照は Linter が静的に検知（[ADR-0002](docs/adr/0002-canonical-state-key-is-node-id.md)）
+- **変数参照**: `{{#id.field#}}` / value_selector の両構文を `state["node_<id>"]["field"]` に正準化（[ADR-0004](docs/adr/0004-variable-reference-normalization-and-special-namespaces.md)）
+- **分岐**: question-classifier / if-else は `add_conditional_edges` + 生成 Router で graph.py に可視化（[ADR-0003](docs/adr/0003-conditional-branching-via-generated-routers.md)）
+- **ノードタイプ対応**: タイプごとの Node Handler に集約。未対応タイプは型付きスタブとして生成され、コンパイル可能な構造を保つ（[ADR-0005](docs/adr/0005-node-type-handler-registry.md)）
+- **RAG**: Dify の公開 Retrieval API を既定バックエンドとし、差し替え可能な `Retriever` ポートの背後に置く（[ADR-0006](docs/adr/0006-retrieval-via-dify-api-behind-a-port.md)）
 
 ## インストール
 
 ```bash
-# リポジトリをクローン
 git clone https://github.com/o02c/dify-workflow-to-langgraph.git
 cd dify-workflow-to-langgraph
-
-# uv で依存関係をインストール
 uv sync
 ```
 
-## 使用方法
-
-### 基本的な使い方
+## クイックスタート
 
 ```bash
 # Dify DSL を LangGraph コードに変換
-uv run python translator.py workflow.yml -o output/
+uv run dify2langgraph workflow.yml -o output/
 
-# 生成されたコードを確認
-ls output/
-# state.py  nodes.py  graph.py
+ls output/workflow/
+# state.py  graph.py  llm.py  nodes/
 ```
 
-### 生成コードの実行
+### CLI オプション
 
 ```bash
-cd output/
-uv run python graph.py
+uv run dify2langgraph --help
+
+# LLM による実装生成をスキップ (決定論的なテンプレートのみ生成)
+uv run dify2langgraph workflow.yml --skip-implement
+
+# --- 以下はオプトインの LLM 後処理 ---
+# LLM でノード名を生成 (日本語タイトル → snake_case)
+uv run dify2langgraph workflow.yml --name-nodes
+
+# リンター実行 / 自動修正
+uv run dify2langgraph workflow.yml --lint
+uv run dify2langgraph workflow.yml --auto-fix
+
+# LLM プロバイダー指定
+uv run dify2langgraph workflow.yml --llm-provider anthropic --llm-model claude-sonnet-4-6
 ```
+
+## 環境変数
+
+| 変数名 | 説明 | デフォルト |
+|--------|------|-----------|
+| `LOG_LEVEL` | ログレベル (DEBUG, INFO, WARNING, ERROR) | `INFO` |
+| `LOG_FORMAT` | ログ形式 (`console` or `json`) | `console` |
+| `LANGSMITH_TRACING` | LangSmith トレーシング有効化 | `false` |
+| `LANGSMITH_API_KEY` | LangSmith API キー | - |
+| `LANGSMITH_PROJECT` | LangSmith プロジェクト名 | `dify2langgraph` |
+| `OPENAI_API_KEY` | OpenAI API キー (LLM 後処理用) | - |
+| `ANTHROPIC_API_KEY` | Anthropic API キー (LLM 後処理用) | - |
+| AWS credentials | Bedrock 用 (標準 AWS 設定) | - |
 
 ## ディレクトリ構造
 
 ```
 dify-workflow-to-langgraph/
-├── core/                      # ランタイムサポートモジュール
-│   ├── __init__.py
-│   ├── base_state.py          # NodeOutput 基底クラス群
-│   └── db_retriever.py        # Dify DB (PGVector) 接続
-├── generator/                 # コード生成モジュール
-│   ├── __init__.py
-│   ├── parser.py              # YAML 解析・変数参照抽出
-│   └── engine.py              # Bedrock コード生成エンジン (TODO)
-├── translator.py              # メインエントリポイント
-├── output/                    # 生成コード出力先
-├── pyproject.toml             # プロジェクト設定
-└── README.md
+├── src/dify2langgraph/        # メインパッケージ (正典)
+│   ├── cli.py                 # CLI エントリポイント
+│   ├── parser/                # DSL パーサー
+│   ├── codegen/               # 決定論的コード生成 (state / nodes / graph)
+│   ├── generator/             # LLM コード生成 (オプトイン)
+│   ├── llm/                   # LLM プロバイダー抽象化
+│   ├── agents/                # lint 自動修正エージェント (オプトイン)
+│   └── templates/             # 生成物に同梱するランタイムテンプレート
+├── tests/                     # テスト (fixtures/ に DSL サンプル)
+├── docs/
+│   ├── adr/                   # 設計判断の記録 (ADR)
+│   ├── architecture.md
+│   ├── development.md
+│   └── STYLE_GUIDE.md
+├── CONTEXT.md                 # 用語集 (正準)
+├── TODO.md                    # ロードマップ
+└── pyproject.toml
 ```
 
-## 生成コード例
+## ドキュメント
 
-### 入力: Dify DSL (YAML)
-
-```yaml
-workflow:
-  graph:
-    nodes:
-      - id: start
-        data:
-          type: start
-          title: Start
-      - id: llm_1
-        data:
-          type: llm
-          title: Generate Response
-          prompt: "Answer: {{#start.inputs.query#}}"
-      - id: end
-        data:
-          type: end
-          title: End
-          outputs:
-            - value: "{{#llm_1.text#}}"
-    edges:
-      - source: start
-        target: llm_1
-      - source: llm_1
-        target: end
-```
-
-### 出力: state.py
-
-```python
-from typing import Any, TypedDict
-
-class GraphState(TypedDict, total=False):
-    """State container for all node outputs."""
-    start: dict[str, Any]   # start: Start
-    llm_1: dict[str, Any]   # llm: Generate Response
-    end: dict[str, Any]     # end: End
-```
-
-### 出力: nodes.py
-
-```python
-from state import GraphState
-
-def start(state: GraphState) -> GraphState:
-    """Execute node: Start (type: start)."""
-    return {
-        **state,
-        "start": {"inputs": {}},
-    }
-
-def llm_1(state: GraphState) -> GraphState:
-    """Execute node: Generate Response (type: llm)."""
-    # Variable references:
-    #   start.inputs.query -> state["start"]["inputs"]["query"]
-    query = state["start"]["inputs"]["query"]
-    # TODO: Call Bedrock LLM
-    return {
-        **state,
-        "llm_1": {"text": "generated response"},
-    }
-
-def end(state: GraphState) -> GraphState:
-    """Execute node: End (type: end)."""
-    # Variable references:
-    #   llm_1.text -> state["llm_1"]["text"]
-    return {
-        **state,
-        "end": {"outputs": {"value": state["llm_1"]["text"]}},
-    }
-```
-
-### 出力: graph.py
-
-```python
-from langgraph.graph import END, START, StateGraph
-from state import GraphState
-from nodes import start, llm_1, end
-
-def build_graph() -> StateGraph:
-    graph = StateGraph(GraphState)
-
-    # Add nodes
-    graph.add_node("start", start)
-    graph.add_node("llm_1", llm_1)
-    graph.add_node("end", end)
-
-    # Add edges
-    graph.add_edge(START, "start")
-    graph.add_edge("start", "llm_1")
-    graph.add_edge("llm_1", "end")
-    graph.add_edge("end", END)
-
-    return graph.compile()
-
-if __name__ == "__main__":
-    workflow = build_graph()
-    result = workflow.invoke({"start": {"inputs": {"query": "Hello!"}}})
-    print(result)
-```
-
-## 環境変数
-
-PGVector 接続用の環境変数：
-
-| 変数名 | 説明 | デフォルト |
-|--------|------|-----------|
-| `DIFY_DB_HOST` | データベースホスト | `localhost` |
-| `DIFY_DB_PORT` | データベースポート | `5432` |
-| `DIFY_DB_NAME` | データベース名 | `dify` |
-| `DIFY_DB_USER` | ユーザー名 | `postgres` |
-| `DIFY_DB_PASSWORD` | パスワード | (空文字) |
-
-## 依存関係
-
-| パッケージ | バージョン | 用途 |
-|-----------|-----------|------|
-| langgraph | >=1.0.5 | ワークフローグラフ実行 |
-| langchain | >=1.2.0 | LLM 抽象化レイヤー |
-| langchain-aws | >=1.2.0 | Amazon Bedrock 統合 |
-| psycopg2-binary | >=2.9.11 | PostgreSQL 接続 |
-| pyyaml | >=6.0.3 | YAML パース |
-| boto3 | >=1.42.0 | AWS SDK |
+- [CONTEXT.md](CONTEXT.md) — 用語集（正準）
+- [docs/adr/](docs/adr/) — 設計判断の記録
+- [アーキテクチャ](docs/architecture.md) / [開発ガイド](docs/development.md) / [スタイルガイド](docs/STYLE_GUIDE.md)
 
 ## ライセンス
 

@@ -11,7 +11,6 @@ from typing import Any
 
 import yaml
 
-
 # Pattern to match Dify variable references: {{#node_id.field#}} or {{#node_id.field.subfield#}}
 VARIABLE_REFERENCE_PATTERN = re.compile(r"\{\{#([^#]+)#\}\}")
 

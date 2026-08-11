@@ -49,27 +49,27 @@ def get_chat_model(
     elif provider == "openai":
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(model=model, **kwargs)
+        return ChatOpenAI(model=model, **kwargs)  # ty: ignore[unknown-argument]
 
     elif provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
-        return ChatAnthropic(model=model, **kwargs)
+        return ChatAnthropic(model=model, **kwargs)  # ty: ignore[unknown-argument]
 
     elif provider == "deepseek":
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(
-            model=model,
-            base_url="https://api.deepseek.com",
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            model=model,  # ty: ignore[unknown-argument]
+            base_url="https://api.deepseek.com",  # ty: ignore[unknown-argument]
+            api_key=os.getenv("DEEPSEEK_API_KEY"),  # ty: ignore[unknown-argument]
             **kwargs,
         )
 
     elif provider == "bedrock":
         from langchain_aws import ChatBedrock
 
-        return ChatBedrock(model_id=model, **kwargs)
+        return ChatBedrock(model_id=model, **kwargs)  # ty: ignore[unknown-argument]
 
     else:
         raise ValueError(f"Unknown provider: {provider}")

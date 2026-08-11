@@ -1,58 +1,51 @@
 # TODO
 
-## High Priority
+Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); terms: [CONTEXT.md](./CONTEXT.md).
 
-- [ ] 条件分岐エッジの実装
-  - 現状: `add_edge`で単純な接続のみ（分岐ノードで重複エッジ）
-  - 改善: `add_conditional_edges`を使った分岐ロジック生成
-  - if-else, question-classifierノードの分岐に対応
-  - 分岐の可視性向上のためgraph.py側で制御
+## Cleanup (整理 PR #4 — 完了)
 
-## Medium Priority
+- [x] `src/dify2langgraph/` を正典化し、旧フラット構成を削除
+  - 削除済: `translator.py`, ルート直下の `generator/` `core/` `agents/` `templates/` `logging_config.py`
+- [x] 陳腐化ドキュメントの処理
+  - 削除済: `docs/migration.md`
+  - 一部改訂済: `docs/architecture.md` `docs/development.md`（ADR/CONTEXT へのポインタ追加）。`STYLE_GUIDE.md` の本格改訂は後続
+- [x] `outputs/` は既に `.gitignore` 済み、`.DS_Store` 除去済
+- [x] `core/db_retriever.py`（直接 SQL）は ADR-0006 により削除（将来アダプタ化は下記 Core 参照）
 
-- [ ] ノード実装生成の並列化
-  - 現状: 直列処理で時間がかかる
-  - 改善: LangChain best practice に従って並列化
-  - `batch()` または `ainvoke()` + `asyncio.gather()` を使用
+## Core (v1, 決定論)
 
-- [ ] ノード実装の自動生成改善 (generator/engine.py)
-  - LLMノード: LangChain ChatModel経由 (`from llm import get_chat_model`)
-  - knowledge-retrievalノード: 共有retriever経由 (`from retriever import get_retriever`)
-  - 共有モジュール（llm.py, retriever.py）のテンプレート生成
+- [ ] 条件分岐エッジの実装 — `add_conditional_edges` + 生成 Router（ADR-0003）
+  - 現状は分岐が全て素の `add_edge` で両方発火してしまうバグ
+  - 対応: question-classifier / if-else
+- [ ] Node Handler レジストリへ再編（ADR-0005）
+  - per-type ロジックを state/node/graph ジェネレータから 1 ハンドラに集約
+  - v1 ハンドラ: start / llm / end / question-classifier / if-else、他は Stub フォールバック
+- [ ] 変数参照の正準化（ADR-0004）— value_selector と `{{#id.field#}}` の両構文 → `state["node_<id>"]["field"]`
+- [ ] 生成物を自己完結パッケージ化（相対 import、1 ノード 1 ファイル）
+- [ ] RAG: `Retriever` ポート + `DifyApiRetriever` 既定アダプタ（ADR-0006）
+- [ ] テスト拡充 — ハンドラ単位、循環参照・孤立ノード等のエッジケース
 
-- [ ] テスト拡充
-  - より多くのDify DSLサンプルでのテスト
-  - エッジケース (循環参照、孤立ノード等)
+## LLM opt-in post-processing（任意・ADR-0001）
 
-## Low Priority
+- [ ] `# TODO` スタブ本体の LLM 埋め（`generator/engine.py`）をオプトイン後処理として整理
+- [ ] lint 自動修正エージェント（`agents/`）をオプトイン後処理として整理
+- [ ] 意味的 snake_case リネームパス（`--name-nodes`）を LLM オプトインとして再位置づけ
+- [ ] ノード生成の並列化（`batch()` / `ainvoke()` + `asyncio.gather()`）
 
-- [ ] CLIオプション拡充
-  - `--dry-run`: 生成せずにパース結果のみ表示
-  - `--format`: 出力フォーマット指定 (nodes分割 or 単一ファイル)
+## Deferred（要調査 / 後続）
 
-- [ ] ドキュメント
-  - 生成されるコードの使い方ガイド
-  - 各ノードタイプの実装例
+- [ ] iteration（ループ）— ループ全体が 1 ノードで内部にサブグラフを持つ表現。実 DSL 調査後に Handler 形状を決定（ADR-0005 参照）
+- [ ] `sys.*` / `env.*` の実装（住所は ADR-0004 で予約済み、実装は後追い）
+- [ ] `conversation.*`（chatflow 専用、対象外）
+- [ ] 埋め込みモデル自動解決 — API 経由で不要化の見込みだが、別バックエンド採用時に再検討
+- [ ] 他ノードタイプ: parameter-extractor / http-request / variable-assigner / template-transform / tool / agent / code
+- [ ] CLI: `--dry-run`, `--single-file`（`--format`）
+- [ ] 生成コードの使い方ガイド / ノードタイプ別実装例
 
-- [ ] Difyの他のノードタイプ対応
-  - iteration (ループ)
-  - parameter-extractor
-  - http-request
-  - variable-assigner
+## Done（旧実装で完了済み・再設計で再編対象）
 
-## Done
-
-- [x] 基本的なパーサー実装
-- [x] state.py生成 (TypedDict)
-- [x] nodes/ディレクトリ生成 (個別ファイル)
-- [x] graph.py生成 (StateGraph)
-- [x] NODE_CONFIGにDify設定を含める
-- [x] ruff + ty でのlint対応
-- [x] Commandを使った戻り値
-- [x] `--name-nodes`オプション: LLMでノード名生成
-  - 日本語タイトル→英語snake_case/CamelCase変換
-  - 例: `知識取得` → `retrieve_knowledge` / `RetrieveKnowledge`
-- [x] state keyをLLM生成名に統一
-  - `state["retrieve_knowledge"]["result"]` 形式で参照
-- [x] LLMプロバイダー抽象化 (OpenAI, Anthropic, Bedrock対応)
-- [x] コード生成プロンプト改善 (LangChain抽象使用)
+- [x] 基本パーサー / state.py / nodes/ / graph.py 生成
+- [x] NODE_CONFIG に Dify 設定を埋め込み
+- [x] ruff + ty lint 対応 / Command 戻り値
+- [x] LLM プロバイダー抽象化（OpenAI / Anthropic / Bedrock）
+- [x] `--name-nodes`（LLM でノード名生成）※ 再設計で opt-in に再位置づけ

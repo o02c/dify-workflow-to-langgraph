@@ -10,7 +10,10 @@ from typing import TypedDict
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from agents.linter import LintResult, run_ruff, run_ty
+from dify2langgraph.agents.linter import LintResult, run_ruff, run_ty
+from dify2langgraph.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class ChangeRecord(TypedDict):
@@ -100,7 +103,7 @@ def should_fix(state: CodingState) -> str:
         return "done"
     # Detect infinite loop: same content appeared before
     if _is_looping(state["changes"]):
-        print(f"  Loop detected at iteration {state['iteration']}, stopping.")
+        logger.debug("Loop detected at iteration %d, stopping.", state["iteration"])
         return "done"
     return "fix"
 
@@ -191,7 +194,7 @@ def build_coding_graph(llm):
     Returns:
         Compiled StateGraph.
     """
-    graph = StateGraph(CodingState)
+    graph = StateGraph(CodingState)  # ty: ignore[invalid-argument-type]
 
     # Add nodes
     graph.add_node("lint", lint_node)
@@ -266,7 +269,7 @@ def fix_directory(
         if "__pycache__" in str(py_file):
             continue
 
-        print(f"Processing: {py_file}")
+        logger.info("Processing: %s", py_file)
         results[str(py_file)] = fix_file(py_file, llm, max_iterations)
 
     return results

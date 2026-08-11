@@ -193,7 +193,7 @@ wheels = [
 [[package]]
 name = "dify-workflow-to-langgraph"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "boto3" },
