@@ -26,7 +26,8 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   - [x] End ノードは value_selector を正規化アクセスに変換した決定論的本体を生成
   - [ ] `{{#context#}}` 解決、`sys.*` / `env.*` の住所実装、End 以外の本体への入力配線（LLM オプトイン後処理と併走・ADR-0001）
 - [x] 生成物を自己完結パッケージ化（相対 import、`__init__`/`__main__`、`sys.path` ハック廃止、ADR-0007）
-- [ ] RAG: `Retriever` ポート + `DifyApiRetriever` 既定アダプタ（ADR-0006）
+- [x] RAG: `Retriever` ポート + `DifyApiRetriever` 既定アダプタ（ADR-0006）
+  - `templates/retriever.py`（依存フリー・urllib）を生成物にバンドル、knowledge-retrieval ノードが `get_retriever().retrieve(...)` を呼ぶ実本体を生成。未設定時は `[]` を返し資格情報なしでも走る
 - [ ] テスト拡充 — ハンドラ単位、循環参照・孤立ノード等のエッジケース
 
 ## LLM opt-in post-processing（任意・ADR-0001）
@@ -42,6 +43,7 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [ ] `sys.*` / `env.*` の実装（住所は ADR-0004 で予約済み、実装は後追い）
 - [ ] `conversation.*`（chatflow 専用、対象外）
 - [ ] 埋め込みモデル自動解決 — API 経由で不要化の見込みだが、別バックエンド採用時に再検討
+- [ ] Retriever に DSL の `retrieval_mode` / `retrieval_model` を転送（現状は `query` + `dataset_ids` のみ、ADR-0006）
 - [ ] 他ノードタイプ: parameter-extractor / http-request / variable-assigner / template-transform / tool / agent / code
 - [ ] CLI: `--dry-run`, `--single-file`（`--format`）
 - [ ] 生成コードの使い方ガイド / ノードタイプ別実装例

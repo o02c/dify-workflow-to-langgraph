@@ -101,6 +101,9 @@ class TestGeneratedGraphRuns:
         # Every node currently gets a stub, so invocation completes without error.
         assert "node_1722391426202" in state  # start
         assert "node_1722397570856" in state  # question-classifier
+        # knowledge-retrieval calls the Retriever port; unconfigured -> [] (ADR-0006),
+        # so the graph still runs end-to-end without Dify API credentials.
+        assert state["node_1722397470145"]["result"] == []
 
     def test_question_classifier_routes_to_single_branch(self, tmp_path):
         """A question-classifier reaches exactly one of its downstream ends.

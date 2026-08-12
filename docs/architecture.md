@@ -48,7 +48,8 @@ src/dify2langgraph/
 │   ├── linter.py         # Linting utilities
 │   └── coding_graph.py   # Auto-fix coding agent
 └── templates/            # Runtime templates copied into generated output
-    └── llm.py
+    ├── llm.py             # LLM configuration helper
+    └── retriever.py       # Retriever port + DifyApiRetriever (ADR-0006)
 ```
 
 ## Components
@@ -154,6 +155,13 @@ WorkflowGraph + LLM
 | `LANGSMITH_TRACING` | Enable LangSmith tracing | `false` |
 | `LANGSMITH_API_KEY` | LangSmith API key | - |
 | `LANGSMITH_PROJECT` | LangSmith project name | `dify2langgraph` |
+
+Read by the **generated** code's `retriever.py` (ADR-0006); unset → retrieval returns `[]`:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DIFY_API_BASE_URL` | Dify instance base URL for the dataset Retrieval API | - |
+| `DIFY_API_KEY` | Dify dataset API key | - |
 
 ### LLM Provider Configuration
 

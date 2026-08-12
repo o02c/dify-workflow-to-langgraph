@@ -167,3 +167,23 @@ class TestEndDeterministicBody:
     def test_end_handler_marks_body_as_deterministic(self):
         assert get_handler("end").emits_stub_body is False
         assert get_handler("llm").emits_stub_body is True
+
+
+class TestKnowledgeRetrievalBody:
+    """knowledge-retrieval calls the Retriever port (ADR-0006)."""
+
+    def test_calls_retriever_with_normalized_query_and_dataset_ids(self):
+        graph = DifyDSLParser().parse_file(FIXTURES_DIR / "guardduty_handler.yml")
+        node = graph.nodes["1722397470145"]
+        stub = get_handler(node.type).stub_output(node, graph)
+        assert stub == {
+            "result": "get_retriever().retrieve("
+            'query=state["node_1722391426202"]["finding"], '
+            "dataset_ids=['a6d5e1e3-28c6-417c-aad8-6f2e3bfc7fd1'])"
+        }
+
+    def test_imports_the_retriever_port(self):
+        node = _node("knowledge-retrieval")
+        handler = get_handler("knowledge-retrieval")
+        assert handler.body_imports(node) == ["from ..retriever import get_retriever"]
+        assert handler.emits_stub_body is False

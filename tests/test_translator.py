@@ -287,3 +287,15 @@ class TestSelfContainedPackage:
             content = (output_dir / "nodes" / "llm_node.py").read_text()
             assert "from ..state import GraphState" in content
             assert "sys.path" not in content
+
+    def test_retriever_template_and_knowledge_node_wiring(self):
+        """retriever.py is bundled and a knowledge-retrieval node calls the port."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "guardduty_handler.yml", output_dir)
+
+            assert (output_dir / "retriever.py").exists()
+
+            kr = (output_dir / "nodes" / "node_1722397470145.py").read_text()
+            assert "from ..retriever import get_retriever" in kr
+            assert "get_retriever().retrieve(" in kr

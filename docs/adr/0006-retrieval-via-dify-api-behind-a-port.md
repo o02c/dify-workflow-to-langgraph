@@ -14,3 +14,22 @@ Knowledge-retrieval uses Dify's **public dataset Retrieval API** as the default 
 - The generated code depends on a running Dify instance reachable via API for the default adapter; swapping to another backend is an adapter implementation.
 - The existing `core/db_retriever.py` (direct SQL) is superseded and should be removed or reduced to an optional alternate adapter.
 - requirement.md Goal #2 must be updated to reflect this decision.
+
+## Status
+
+Implemented. The `Retriever` port + default `DifyApiRetriever` adapter ship as a
+dependency-free template (`templates/retriever.py`, stdlib `urllib`) copied into every
+generated package as `retriever.py`. `KnowledgeRetrievalHandler` emits a real body that calls
+`get_retriever().retrieve(query=<normalized selector>, dataset_ids=[...])` (ADR-0004 for the
+query normalization) and imports the port via `from ..retriever import get_retriever`. The
+adapter reads `DIFY_API_BASE_URL` / `DIFY_API_KEY` from the environment; when unset it logs a
+warning and returns `[]`, so the generated graph runs end-to-end without credentials. Swap the
+backend by replacing the module-level singleton in `get_retriever()` with another `Retriever`.
+`core/db_retriever.py` was already removed in the redesign cleanup. Covered by
+`tests/test_retriever.py`, `tests/test_handlers.py`, and `tests/test_generated.py`.
+
+The emitted query is a canonical `state[...]` access, so it shares the End node's KeyError
+semantics (ADR-0004): it assumes the referenced upstream node ran and populated the field, which
+topological execution guarantees. The DSL's `retrieval_mode` / `retrieval_model` are not yet
+forwarded (the handler passes only `query` + `dataset_ids`); wiring them through is a future
+enhancement.

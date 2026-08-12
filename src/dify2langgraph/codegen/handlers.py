@@ -57,6 +57,10 @@ class NodeHandler:
         """Field name -> type annotation for this node's Node Output."""
         return {"output": "Any"}
 
+    def body_imports(self, node: NodeInfo) -> list[str]:
+        """Extra import lines the generated node body needs (e.g. the Retriever)."""
+        return []
+
     def stub_output(
         self,
         node: NodeInfo,
@@ -97,9 +101,34 @@ class LlmHandler(NodeHandler):
 
 class KnowledgeRetrievalHandler(NodeHandler):
     node_type = "knowledge-retrieval"
+    emits_stub_body = False  # deterministic: calls the Retriever port (ADR-0006)
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
         return {"result": "list[dict[str, Any]]"}
+
+    def body_imports(self, node: NodeInfo) -> list[str]:
+        return ["from ..retriever import get_retriever"]
+
+    def stub_output(
+        self,
+        node: NodeInfo,
+        graph: WorkflowGraph,
+        node_name_map: dict[str, tuple[str, str]] | None = None,
+    ) -> dict[str, str]:
+        # Retrieve through the Retriever port (ADR-0006): the query comes from the
+        # node's query_variable_selector (normalized to a canonical access, ADR-0004)
+        # and the dataset_ids from the Dify config.
+        selector = node.data.get("query_variable_selector") or []
+        dataset_ids = node.data.get("dataset_ids") or []
+        if len(selector) >= 2 and selector[0] in graph.nodes:
+            key, _ = get_node_names(str(selector[0]), node_name_map)
+            query = f'state["{key}"]'
+            for part in selector[1:]:
+                query += f'["{part}"]'
+        else:
+            query = '""'
+        call = f"get_retriever().retrieve(query={query}, dataset_ids={dataset_ids!r})"
+        return {"result": call}
 
 
 class CodeHandler(NodeHandler):
