@@ -5,12 +5,9 @@ This module generates the graph.py file with StateGraph construction.
 
 from pathlib import Path
 
+from dify2langgraph.codegen.handlers import decision_field, is_branching
 from dify2langgraph.codegen.naming import get_node_names
-from dify2langgraph.codegen.routing import (
-    branch_map,
-    decision_field,
-    is_branching_node,
-)
+from dify2langgraph.codegen.routing import branch_map
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import WorkflowGraph
 
@@ -47,7 +44,7 @@ def generate_graph_file(
         lines.append(f"from nodes import {imports}")
 
     # Router functions for Branching Nodes (ADR-0003)
-    branching_nodes = [n for n in graph.nodes.values() if is_branching_node(n)]
+    branching_nodes = [n for n in graph.nodes.values() if is_branching(n)]
     for node in branching_nodes:
         func_name, _ = get_node_names(node.id, node_name_map)
         field = decision_field(node)

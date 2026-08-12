@@ -1,36 +1,16 @@
-"""Deterministic routing helpers for Branching Nodes (ADR-0003).
+"""Structural routing helpers for Branching Nodes (ADR-0003).
 
-A Branching Node (``question-classifier`` / ``if-else``) is wired with
-``add_conditional_edges`` plus a generated ``route_<node>(state)`` function whose
-branch-key -> target mapping is derived from the DSL edge ``sourceHandle``.
-Everything here is deterministic; only the branch *decision* lives in the
-(possibly LLM-backed) node body, while the *wiring* stays in graph.py.
+These helpers derive the branch-key -> target mapping from the DSL edge
+``sourceHandle``. They are type-agnostic: *which* output field drives the route
+(and whether a Node branches at all) is type-specific knowledge that lives on the
+Node Handler in :mod:`dify2langgraph.codegen.handlers`.
 """
 
 from dify2langgraph.codegen.naming import get_node_names
-from dify2langgraph.parser.dsl_parser import EdgeInfo, NodeInfo, WorkflowGraph
-
-# Node types that route to one of several successors based on a runtime decision.
-BRANCHING_NODE_TYPES = frozenset({"question-classifier", "if-else"})
+from dify2langgraph.parser.dsl_parser import EdgeInfo, WorkflowGraph
 
 # sourceHandle value Dify uses for a plain (non-branching) successor edge.
 PLAIN_SOURCE_HANDLE = "source"
-
-# Per-type: which field of the Node Output drives the route.
-_DECISION_FIELD = {
-    "question-classifier": "class_id",
-    "if-else": "selected_branch",
-}
-
-
-def is_branching_node(node: NodeInfo) -> bool:
-    """Whether this node routes conditionally (needs add_conditional_edges)."""
-    return node.type in BRANCHING_NODE_TYPES
-
-
-def decision_field(node: NodeInfo) -> str:
-    """The Node Output field whose value selects the branch."""
-    return _DECISION_FIELD[node.type]
 
 
 def branch_edges(graph: WorkflowGraph, node_id: str) -> list[EdgeInfo]:

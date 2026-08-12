@@ -97,3 +97,23 @@ class TestGeneratedGraphRuns:
         )
         ends = {"end_true", "end_false"}
         assert len(ends & set(keys)) == 1
+
+
+class TestRealWorkflows:
+    """End-to-end runs against real Dify workflow exports (see fixtures/SOURCES.md)."""
+
+    def test_translation_workflow_routes_to_single_if_else_branch(self, tmp_path):
+        """A real workflow with an if-else reaches exactly one branch target."""
+        keys = _generate_and_run(tmp_path, "translation_workflow.yml", {})
+        # if-else 1721118545228: 'true' -> ...559807, 'false' -> ...668192.
+        branches = {"node_1721118559807", "node_1721118668192"}
+        assert len(branches & set(keys)) == 1
+
+    def test_json_translate_workflow_builds_and_runs(self, tmp_path):
+        """A real workflow using code/tool/iteration still builds and invokes.
+
+        Iteration internals are stubbed via the fallback handler (ADR-0005 leaves
+        the iteration shape open), but the graph must still compile and run.
+        """
+        keys = _generate_and_run(tmp_path, "json_translate.yml", {})
+        assert "node_1731659178787" in keys  # start node ran
