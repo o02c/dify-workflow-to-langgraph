@@ -137,6 +137,16 @@ def main() -> int:
     input_name = args.input.stem  # e.g., "simple_workflow" from "simple_workflow.yml"
     output_dir = args.output / input_name
 
+    # The output is a package (ADR-0007), so its directory name must be a valid
+    # Python identifier to be importable via `python -m` / `from <pkg> import ...`.
+    if not input_name.isidentifier():
+        logger.warning(
+            "Output package name %r is not a valid Python identifier; rename the "
+            "directory before running `python -m %s`.",
+            input_name,
+            input_name,
+        )
+
     try:
         # Parse the workflow first to get node info
         dsl_parser = DifyDSLParser()

@@ -16,8 +16,9 @@ build_graph`) without mutating `sys.path`, and keeps its internal wiring explici
   parent directory (or import it), not `python graph.py` from inside. The
   standalone-run demo moved from `graph.py` to `__main__.py`.
 - **The package directory name must be a valid Python identifier** (no hyphens,
-  no leading digit) to be importable. The CLI writes to `outputs/<input_stem>`;
-  a stem with hyphens would need renaming before `python -m`.
+  no leading digit) to be importable via a normal `from <pkg> import ...`. The CLI
+  writes to `outputs/<input_stem>` and logs a warning when the stem is not a valid
+  identifier; auto-sanitizing the name is a possible follow-up.
 - Template files copied into the package skip dunder files so they can't clobber
   the generated `__init__.py`.
 - `sys`/`env` homes (ADR-0004) and `retriever.py` (ADR-0006), when implemented,

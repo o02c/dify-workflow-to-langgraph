@@ -2,7 +2,7 @@
 
 Unlike test_translator.py (which only checks the generated source compiles and
 contains expected strings), these tests build and invoke the generated graph in
-an isolated subprocess -- exactly what a user does with `python graph.py`.
+an isolated subprocess -- exactly what a user does with `python -m <package>`.
 """
 
 import json
@@ -69,6 +69,18 @@ class TestGeneratedGraphRuns:
             tmp_path, "simple_workflow.yml", {"start_node": {}}
         )
         assert sorted(state) == ["end_node", "llm_node", "start_node"]
+
+    def test_package_runs_as_module(self, tmp_path):
+        """`python -m <pkg>` runs the __main__ entry point end-to-end (ADR-0007)."""
+        translate(FIXTURES_DIR / "simple_workflow.yml", tmp_path / _PKG)
+        proc = subprocess.run(
+            [sys.executable, "-m", _PKG],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "start_node" in proc.stdout  # __main__ prints the final state
 
     def test_end_node_forwards_upstream_value(self, tmp_path):
         """The End node deterministically forwards an upstream field (ADR-0004).
