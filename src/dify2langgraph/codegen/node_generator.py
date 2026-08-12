@@ -141,14 +141,17 @@ def _generate_node_file(
             lines.append(f"    # {ref.raw} -> {ref.to_state_access(node_name_map)}")
         lines.append("")
 
-    # Generate the Stub body. The handler owns the placeholder values -- notably,
-    # a Branching Node handler defaults its decision field to a real branch key so
-    # the generated router (ADR-0003) resolves to a valid successor and the graph
-    # runs end-to-end before the body is implemented.
-    lines.append(f"    # TODO: Implement {node.type} node logic")
-    lines.append("    # See NODE_CONFIG for full Dify configuration details")
+    # Generate the node body. The handler owns the output values: most types emit
+    # a placeholder Stub, but some (e.g. End) emit a real deterministic body that
+    # forwards upstream values (ADR-0004). A Branching Node handler defaults its
+    # decision field to a real branch key so the router (ADR-0003) resolves.
+    if handler.emits_stub_body:
+        lines.append(f"    # TODO: Implement {node.type} node logic")
+        lines.append("    # See NODE_CONFIG for full Dify configuration details")
+    else:
+        lines.append(f"    # Deterministic {node.type} node (generated from the Dify DSL)")
     lines.append("")
-    stub_output = handler.stub_output(node, graph)
+    stub_output = handler.stub_output(node, graph, node_name_map)
     lines.append(f"    output: {class_name} = {{")
     for field_name, literal in stub_output.items():
         lines.append(f'        "{field_name}": {literal},')
