@@ -14,9 +14,9 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 
 ## Core (v1, 決定論)
 
-- [ ] 条件分岐エッジの実装 — `add_conditional_edges` + 生成 Router（ADR-0003）
-  - 現状は分岐が全て素の `add_edge` で両方発火してしまうバグ
-  - 対応: question-classifier / if-else
+- [x] 条件分岐エッジの実装 — `add_conditional_edges` + 生成 Router（ADR-0003）
+  - `codegen/routing.py` に決定論ルール、`graph_generator` が `route_<node>` + 条件エッジを生成
+  - 対応: question-classifier / if-else。分岐 Stub は先頭ブランチにデフォルト
 - [ ] Node Handler レジストリへ再編（ADR-0005）
   - per-type ロジックを state/node/graph ジェネレータから 1 ハンドラに集約
   - v1 ハンドラ: start / llm / end / question-classifier / if-else、他は Stub フォールバック

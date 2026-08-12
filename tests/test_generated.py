@@ -10,8 +10,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from dify2langgraph.cli import translate
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -73,18 +71,17 @@ class TestGeneratedGraphRuns:
         assert "node_1722391426202" in keys  # start
         assert "node_1722397570856" in keys  # question-classifier
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="branching not implemented -- ADR-0003: conditional edges are "
-        "emitted as plain add_edge, so all branches fan out. Remove this marker "
-        "when the router is generated.",
-    )
     def test_question_classifier_routes_to_single_branch(self, tmp_path):
-        """A question-classifier must reach exactly one of its downstream ends."""
+        """A question-classifier reaches exactly one of its downstream ends.
+
+        Routing is generated per ADR-0003: the stub defaults the decision field
+        (``class_id``) to the first branch key, so the router resolves to a single
+        successor instead of fanning out to every branch.
+        """
         keys = _generate_and_run(
             tmp_path, "guardduty_handler.yml", {"node_1722391426202": {}}
         )
         # The two end nodes are the two branches of the classifier; only one
-        # should be reached once routing is correct.
+        # should be reached now that routing is correct.
         ends = {"node_1722399235845", "node_1722399356175"}
         assert len(ends & set(keys)) == 1

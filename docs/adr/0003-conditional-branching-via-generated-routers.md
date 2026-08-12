@@ -8,4 +8,13 @@ We keep routing in graph.py rather than having node bodies return `Command(goto=
 
 - Each branching Node type needs a type-specific rule for which output field drives the route — the Structure is not uniform across Node types.
 - `iteration` (loop / subgraph) is deliberately out of scope for now; its Structure differs fundamentally from single-successor and conditional-branch Nodes.
-- The current output that emits plain `add_edge` for every branch (causing all branches to fire) is a bug this decision replaces.
+- The earlier output that emitted plain `add_edge` for every branch (causing all branches to fire) was a bug this decision replaces.
+
+## Status
+
+Implemented. `codegen/routing.py` holds the deterministic rules (`BRANCHING_NODE_TYPES`,
+per-type `decision_field`, `branch_map` from `sourceHandle`). `graph_generator.py` emits a
+`route_<node>` function plus `add_conditional_edges` for each Branching Node; `node_generator.py`
+defaults the decision field of a Branching Node's stub to the first branch key so the graph
+resolves to a single successor and runs end-to-end before bodies are implemented.
+`tests/test_generated.py::test_question_classifier_routes_to_single_branch` guards the behavior.

@@ -6,6 +6,11 @@ This module generates the graph.py file with StateGraph construction.
 from pathlib import Path
 
 from dify2langgraph.codegen.naming import get_node_names
+from dify2langgraph.codegen.routing import (
+    branch_map,
+    decision_field,
+    is_branching_node,
+)
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import WorkflowGraph
 
@@ -41,6 +46,19 @@ def generate_graph_file(
         imports = ", ".join(sorted(node_funcs))
         lines.append(f"from nodes import {imports}")
 
+    # Router functions for Branching Nodes (ADR-0003)
+    branching_nodes = [n for n in graph.nodes.values() if is_branching_node(n)]
+    for node in branching_nodes:
+        func_name, _ = get_node_names(node.id, node_name_map)
+        field = decision_field(node)
+        lines.extend([
+            "",
+            "",
+            f"def route_{func_name}(state: GraphState) -> str:",
+            f'    """Route for branching node: {node.title} ({node.type})."""',
+            f'    return state["{func_name}"]["{field}"]',
+        ])
+
     lines.extend([
         "",
         "",
@@ -58,29 +76,33 @@ def generate_graph_file(
     lines.append("")
     lines.append("    # Add edges")
 
+    branching_ids = {n.id for n in branching_nodes}
+
     # Add start edge
     if graph.start_node_id:
         start_func, _ = get_node_names(graph.start_node_id, node_name_map)
         lines.append(f'    graph.add_edge(START, "{start_func}")')
 
-    # Add regular edges
+    # Plain edges -- edges out of a Branching Node are wired conditionally below.
     for edge in graph.edges:
-        # Skip edges from start node (already handled)
-        if edge.source_node_id == graph.start_node_id and not edge.source_handle:
+        if edge.source_node_id in branching_ids:
             continue
 
         source_func, _ = get_node_names(edge.source_node_id, node_name_map)
         target_func, _ = get_node_names(edge.target_node_id, node_name_map)
+        lines.append(f'    graph.add_edge("{source_func}", "{target_func}")')
 
-        # Handle conditional edges (with source_handle)
-        if edge.source_handle:
-            lines.append(
-                f'    # Conditional edge: {source_func} '
-                f'({edge.source_handle}) -> {target_func}'
-            )
-
+    # Conditional edges for Branching Nodes (ADR-0003)
+    if branching_nodes:
+        lines.append("")
+        lines.append("    # Conditional edges (branching)")
+    for node in branching_nodes:
+        func_name, _ = get_node_names(node.id, node_name_map)
+        mapping = branch_map(graph, node.id, node_name_map)
+        pairs = ", ".join(f'"{key}": "{target}"' for key, target in mapping.items())
         lines.append(
-            f'    graph.add_edge("{source_func}", "{target_func}")'
+            f'    graph.add_conditional_edges('
+            f'"{func_name}", route_{func_name}, {{{pairs}}})'
         )
 
     # Add edges from end nodes to END
