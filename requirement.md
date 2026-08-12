@@ -30,6 +30,6 @@ Dify のワークフロー DSL (YAML) を解析し、実行可能で型安全な
 
 ## 5. Canonical Layout
 `src/dify2langgraph/` をパッケージ正典とする（旧フラット構成 `translator.py` 等は廃止）。
-生成物は自己完結パッケージ（相対 import・`sys.path` ハック廃止）を目標とする。
-- 現状出力: `state.py` / `graph.py` / `nodes/<node>.py` / `llm.py`（フラット import・要 `sys.path`）
-- 目標追加: `env.py`（ADR-0004）/ `retriever.py`（ADR-0006）、および相対 import 化（いずれも未実装）
+生成物は自己完結パッケージ（相対 import・`sys.path` ハック廃止、ADR-0007）として出力する。
+- 現状出力: `__init__.py` / `__main__.py` / `state.py` / `graph.py` / `nodes/<node>.py` / `llm.py`（相対 import、`python -m <pkg>` で実行）
+- 目標追加（未実装）: `env.py`（ADR-0004）/ `retriever.py`（ADR-0006）

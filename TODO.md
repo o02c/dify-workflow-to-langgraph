@@ -25,7 +25,7 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   - [x] 正準キー化（`sanitize_function_name` を leaf `dify2langgraph/naming.py` に集約し parser が共有、数値 ID バグ修正）
   - [x] End ノードは value_selector を正規化アクセスに変換した決定論的本体を生成
   - [ ] `{{#context#}}` 解決、`sys.*` / `env.*` の住所実装、End 以外の本体への入力配線（LLM オプトイン後処理と併走・ADR-0001）
-- [ ] 生成物を自己完結パッケージ化（相対 import、1 ノード 1 ファイル）
+- [x] 生成物を自己完結パッケージ化（相対 import、`__init__`/`__main__`、`sys.path` ハック廃止、ADR-0007）
 - [ ] RAG: `Retriever` ポート + `DifyApiRetriever` 既定アダプタ（ADR-0006）
 - [ ] テスト拡充 — ハンドラ単位、循環参照・孤立ノード等のエッジケース
 

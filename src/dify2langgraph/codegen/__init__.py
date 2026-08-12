@@ -10,6 +10,7 @@ from dify2langgraph.codegen.naming import (
     sanitize_function_name,
 )
 from dify2langgraph.codegen.node_generator import generate_nodes_directory
+from dify2langgraph.codegen.package_generator import generate_package_files
 from dify2langgraph.codegen.state_generator import (
     generate_state_file,
     get_node_output_fields,
@@ -23,4 +24,5 @@ __all__ = [
     "get_node_output_fields",
     "generate_nodes_directory",
     "generate_graph_file",
+    "generate_package_files",
 ]
