@@ -99,7 +99,9 @@ def generate_graph_file(
     for node in branching_nodes:
         func_name, _ = get_node_names(node.id, node_name_map)
         mapping = branch_map(graph, node.id, node_name_map)
-        pairs = ", ".join(f'"{key}": "{target}"' for key, target in mapping.items())
+        # repr() the keys/targets so odd characters in a sourceHandle can't break
+        # the emitted literal (matches how node_generator emits the stub default).
+        pairs = ", ".join(f"{key!r}: {target!r}" for key, target in mapping.items())
         lines.append(
             f'    graph.add_conditional_edges('
             f'"{func_name}", route_{func_name}, {{{pairs}}})'

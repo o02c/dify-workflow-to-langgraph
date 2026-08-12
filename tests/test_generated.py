@@ -85,3 +85,15 @@ class TestGeneratedGraphRuns:
         # should be reached now that routing is correct.
         ends = {"node_1722399235845", "node_1722399356175"}
         assert len(ends & set(keys)) == 1
+
+    def test_if_else_routes_to_single_branch(self, tmp_path):
+        """An if-else reaches exactly one of its true/false branches.
+
+        The stub defaults ``selected_branch`` to the first branch key (``true``),
+        so the router resolves to a single successor instead of fanning out.
+        """
+        keys = _generate_and_run(
+            tmp_path, "ifelse_workflow.yml", {"start_node": {}}
+        )
+        ends = {"end_true", "end_false"}
+        assert len(ends & set(keys)) == 1

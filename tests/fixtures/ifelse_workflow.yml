@@ -1,0 +1,50 @@
+app:
+  name: ifelse_workflow
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: start_node
+        data:
+          type: start
+          title: Start
+          variables:
+            - variable: query
+              type: text-input
+              label: Query
+              required: true
+      - id: ifelse_node
+        data:
+          type: if-else
+          title: Branch on query
+          cases:
+            - case_id: "true"
+              logical_operator: and
+              conditions:
+                - variable_selector: [start_node, query]
+                  comparison_operator: contains
+                  value: urgent
+      - id: end_true
+        data:
+          type: end
+          title: Urgent path
+          outputs:
+            - variable: result
+              value_selector: [ifelse_node, selected_branch]
+      - id: end_false
+        data:
+          type: end
+          title: Normal path
+          outputs:
+            - variable: result
+              value_selector: [ifelse_node, selected_branch]
+    edges:
+      - source: start_node
+        target: ifelse_node
+        sourceHandle: source
+      - source: ifelse_node
+        target: end_true
+        sourceHandle: "true"
+      - source: ifelse_node
+        target: end_false
+        sourceHandle: "false"
