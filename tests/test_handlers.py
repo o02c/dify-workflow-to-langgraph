@@ -75,6 +75,36 @@ class TestOutputFields:
     def test_end_without_outputs_defaults_to_result(self):
         assert get_handler("end").output_fields(_node("end")) == {"result": "Any"}
 
+    def test_template_transform(self):
+        assert get_handler("template-transform").output_fields(
+            _node("template-transform")
+        ) == {"output": "str"}
+
+    def test_answer(self):
+        assert get_handler("answer").output_fields(_node("answer")) == {"answer": "str"}
+
+    def test_agent(self):
+        assert get_handler("agent").output_fields(_node("agent")) == {
+            "text": "str",
+            "files": "list[dict[str, Any]]",
+        }
+
+    def test_knowledge_retrieval(self):
+        assert get_handler("knowledge-retrieval").output_fields(
+            _node("knowledge-retrieval")
+        ) == {"result": "list[dict[str, Any]]"}
+
+    def test_tool(self):
+        assert get_handler("tool").output_fields(_node("tool")) == {
+            "text": "str",
+            "files": "list[dict[str, Any]]",
+        }
+
+    def test_variable_aggregator(self):
+        assert get_handler("variable-aggregator").output_fields(
+            _node("variable-aggregator")
+        ) == {"output": "Any"}
+
 
 class TestBranching:
     """Branching Nodes expose is_branching + the field that drives the route."""
