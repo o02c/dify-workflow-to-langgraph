@@ -27,6 +27,8 @@ src/dify2langgraph/
 ├── codegen/              # Code generation module
 │   ├── __init__.py
 │   ├── naming.py         # Python naming utilities
+│   ├── handlers.py       # Node Handler registry (per-type knowledge, ADR-0005)
+│   ├── routing.py        # Structural branch-map helpers (ADR-0003)
 │   ├── state_generator.py    # GraphState generation
 │   ├── node_generator.py     # Node file generation
 │   └── graph_generator.py    # Graph construction code
@@ -159,11 +161,13 @@ LLM providers are configured via environment variables:
 
 ### Adding New Node Types
 
-Target design ([ADR-0005](./adr/0005-node-type-handler-registry.md)): add **one Node Handler**
-for the type, exposing `output_fields()`, `generate_body()`, and `routing()`; unknown types
-fall back to a Stub. As of today this logic is still scattered across `state_generator.py`
-(output fields), `node_generator.py` (body), and `graph_generator.py` (routing) and is being
-migrated to the handler registry — until then, adding a type touches those three generators.
+Per [ADR-0005](./adr/0005-node-type-handler-registry.md), per-type knowledge lives in **one
+Node Handler** in `codegen/handlers.py`. To support a new type, add a `NodeHandler` subclass
+that sets `node_type` and overrides `output_fields()` (and, for a Branching Node, sets
+`is_branching` / `decision_field` and overrides `stub_output()`), then register it in
+`_HANDLERS`. The generators pick it up automatically via `get_handler()`; an unregistered type
+falls back to the base handler's generic typed Stub. Structural branch-map derivation (from the
+DSL `sourceHandle`) stays type-agnostic in `codegen/routing.py`.
 
 ### Adding New LLM Providers
 
@@ -177,6 +181,7 @@ Tests are organized in `tests/`:
 
 - `conftest.py`: Shared fixtures
 - `test_parser.py`: Parser module tests
+- `test_handlers.py`: Node Handler registry tests (output fields, branching, stub bodies)
 - `test_translator.py`: Code generation tests (source compiles / contains expected strings)
-- `test_generated.py`: End-to-end tests that build and invoke the generated graph in a subprocess
-- `fixtures/`: Test YAML files
+- `test_generated.py`: End-to-end tests that build and invoke the generated graph in a subprocess, including real workflow exports
+- `fixtures/`: Test YAML files (see `fixtures/SOURCES.md` for provenance)

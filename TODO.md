@@ -17,9 +17,10 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [x] 条件分岐エッジの実装 — `add_conditional_edges` + 生成 Router（ADR-0003）
   - `codegen/routing.py` に決定論ルール、`graph_generator` が `route_<node>` + 条件エッジを生成
   - 対応: question-classifier / if-else。分岐 Stub は先頭ブランチにデフォルト
-- [ ] Node Handler レジストリへ再編（ADR-0005）
-  - per-type ロジックを state/node/graph ジェネレータから 1 ハンドラに集約
-  - v1 ハンドラ: start / llm / end / question-classifier / if-else、他は Stub フォールバック
+- [x] Node Handler レジストリへ再編（ADR-0005）
+  - `codegen/handlers.py` に per-type 知識（output_fields / stub_output / is_branching / decision_field）を集約
+  - state/node/graph ジェネレータは `get_handler()` 経由の薄いオーケストレータに
+  - v1 ハンドラ: start / llm / end / knowledge-retrieval / code / tool / template-transform / variable-aggregator / answer / agent / question-classifier / if-else、他は Stub フォールバック
 - [ ] 変数参照の正準化（ADR-0004）— value_selector と `{{#id.field#}}` の両構文 → `state["node_<id>"]["field"]`
 - [ ] 生成物を自己完結パッケージ化（相対 import、1 ノード 1 ファイル）
 - [ ] RAG: `Retriever` ポート + `DifyApiRetriever` 既定アダプタ（ADR-0006）

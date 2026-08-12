@@ -6,44 +6,12 @@ This module generates individual node files in the nodes/ directory.
 import json
 from pathlib import Path
 
+from dify2langgraph.codegen.handlers import get_handler
 from dify2langgraph.codegen.naming import get_node_names
-from dify2langgraph.codegen.routing import (
-    decision_field,
-    default_branch_key,
-    is_branching_node,
-)
-from dify2langgraph.codegen.state_generator import get_node_output_fields
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
 
 logger = get_logger(__name__)
-
-
-def _get_placeholder_value(field_type: str) -> str:
-    """Get a placeholder value for a given type annotation.
-
-    Args:
-        field_type: Type annotation string.
-
-    Returns:
-        Python literal string for placeholder.
-    """
-    if field_type == "str":
-        return '"placeholder"'
-    elif field_type == "float":
-        return "0.0"
-    elif field_type == "int":
-        return "0"
-    elif field_type == "bool":
-        return "False"
-    elif field_type.startswith("list"):
-        return "[]"
-    elif field_type.startswith("dict"):
-        return "{}"
-    elif field_type == "Any":
-        return "None"
-    else:
-        return "None"
 
 
 def generate_nodes_directory(
@@ -91,7 +59,8 @@ def _generate_node_file(
     filename = f"{func_name}.py"
 
     # Prepare node metadata for agent
-    output_fields = get_node_output_fields(node)
+    handler = get_handler(node.type)
+    output_fields = handler.output_fields(node)
     node_config = {
         "id": node.id,
         "state_key": func_name,  # LLM-generated name used as state key
@@ -172,26 +141,17 @@ def _generate_node_file(
             lines.append(f"    # {ref.raw} -> {ref.to_state_access(node_name_map)}")
         lines.append("")
 
-    # Generate placeholder with proper output structure
+    # Generate the Stub body. The handler owns the placeholder values -- notably,
+    # a Branching Node handler defaults its decision field to a real branch key so
+    # the generated router (ADR-0003) resolves to a valid successor and the graph
+    # runs end-to-end before the body is implemented.
     lines.append(f"    # TODO: Implement {node.type} node logic")
     lines.append("    # See NODE_CONFIG for full Dify configuration details")
     lines.append("")
-    # For a Branching Node, default the decision field to a real branch key so
-    # the generated router (ADR-0003) resolves to a valid successor and the graph
-    # runs end-to-end before the body is implemented.
-    branch_default = None
-    branch_field = None
-    if is_branching_node(node):
-        branch_field = decision_field(node)
-        branch_default = default_branch_key(graph, node.id)
-
+    stub_output = handler.stub_output(node, graph)
     lines.append(f"    output: {class_name} = {{")
-    for field_name, field_type in output_fields.items():
-        if field_name == branch_field and branch_default is not None:
-            placeholder = repr(branch_default)
-        else:
-            placeholder = _get_placeholder_value(field_type)
-        lines.append(f'        "{field_name}": {placeholder},')
+    for field_name, literal in stub_output.items():
+        lines.append(f'        "{field_name}": {literal},')
     lines.append("    }")
     lines.append("")
     lines.append(f'    return Command(update={{"{func_name}": output}})')
