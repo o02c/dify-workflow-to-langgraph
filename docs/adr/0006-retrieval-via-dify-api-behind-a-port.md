@@ -27,3 +27,9 @@ warning and returns `[]`, so the generated graph runs end-to-end without credent
 backend by replacing the module-level singleton in `get_retriever()` with another `Retriever`.
 `core/db_retriever.py` was already removed in the redesign cleanup. Covered by
 `tests/test_retriever.py`, `tests/test_handlers.py`, and `tests/test_generated.py`.
+
+The emitted query is a canonical `state[...]` access, so it shares the End node's KeyError
+semantics (ADR-0004): it assumes the referenced upstream node ran and populated the field, which
+topological execution guarantees. The DSL's `retrieval_mode` / `retrieval_model` are not yet
+forwarded (the handler passes only `query` + `dataset_ids`); wiring them through is a future
+enhancement.
