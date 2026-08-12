@@ -30,6 +30,13 @@ backend by replacing the module-level singleton in `get_retriever()` with anothe
 
 The emitted query is a canonical `state[...]` access, so it shares the End node's KeyError
 semantics (ADR-0004): it assumes the referenced upstream node ran and populated the field, which
-topological execution guarantees. The DSL's `retrieval_mode` / `retrieval_model` are not yet
-forwarded (the handler passes only `query` + `dataset_ids`); wiring them through is a future
-enhancement.
+topological execution guarantees.
+
+Verified against a real self-hosted Dify 1.16.1: the `/v1/datasets/{id}/retrieve` API **requires a
+complete `retrieval_model`** (`search_method`, `reranking_enable`, `top_k`, `score_threshold_enabled`
+together) — a query-only request 400s (`Default model not found for text-embedding`). Because the
+Node DSL does not carry `search_method` (it is a dataset/deploy concern), the adapter always builds
+a complete `retrieval_model`: `search_method` and `top_k` come from `DIFY_RETRIEVAL_SEARCH_METHOD`
+(default `semantic_search`) / `DIFY_RETRIEVAL_TOP_K`, and the `KnowledgeRetrievalHandler` overlays the
+Node's `multiple_retrieval_config` (`top_k`, `score_threshold`). Reranking passthrough and the
+`single` retrieval mode (LLM-selected dataset) are deferred.

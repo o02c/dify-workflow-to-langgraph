@@ -127,8 +127,31 @@ class KnowledgeRetrievalHandler(NodeHandler):
                 query += f'["{part}"]'
         else:
             query = '""'
-        call = f"get_retriever().retrieve(query={query}, dataset_ids={dataset_ids!r})"
+        call = f"get_retriever().retrieve(query={query}, dataset_ids={dataset_ids!r}"
+        retrieval_model = self._retrieval_model(node)
+        if retrieval_model:
+            call += f", retrieval_model={retrieval_model!r}"
+        call += ")"
         return {"result": call}
+
+    @staticmethod
+    def _retrieval_model(node: NodeInfo) -> dict[str, object]:
+        """Project the Node's multiple_retrieval_config into a retrieval_model.
+
+        Only the DSL-carried fields (top_k, score_threshold); search_method and the
+        rest are defaulted by the Retriever adapter (a dataset/deploy concern). The
+        adapter also fills the API's other required fields. Reranking passthrough is
+        deferred (it needs a rerank provider/model config).
+        """
+        config = node.data.get("multiple_retrieval_config") or {}
+        model: dict[str, object] = {}
+        if config.get("top_k") is not None:
+            model["top_k"] = config["top_k"]
+        threshold = config.get("score_threshold")
+        if threshold is not None:
+            model["score_threshold_enabled"] = True
+            model["score_threshold"] = threshold
+        return model
 
 
 class CodeHandler(NodeHandler):

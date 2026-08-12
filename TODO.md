@@ -43,7 +43,9 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [ ] `sys.*` / `env.*` の実装（住所は ADR-0004 で予約済み、実装は後追い）
 - [ ] `conversation.*`（chatflow 専用、対象外）
 - [ ] 埋め込みモデル自動解決 — API 経由で不要化の見込みだが、別バックエンド採用時に再検討
-- [ ] Retriever に DSL の `retrieval_mode` / `retrieval_model` を転送（現状は `query` + `dataset_ids` のみ、ADR-0006）
+- [~] Retriever に検索設定を転送（ADR-0006、実 Dify 1.16.1 で検証）
+  - [x] `/retrieve` は完全な `retrieval_model`（search_method / reranking_enable / top_k / score_threshold_enabled）が必須 → adapter が補完。`search_method` は DSL に無いため env `DIFY_RETRIEVAL_SEARCH_METHOD`（既定 semantic_search）で制御。handler が `multiple_retrieval_config` の top_k / score_threshold を投影
+  - [ ] reranking（`reranking_model` / provider）の転送、`single` モード（LLM 選択）対応
 - [ ] 他ノードタイプ: parameter-extractor / http-request / variable-assigner / template-transform / tool / agent / code
 - [ ] CLI: `--dry-run`, `--single-file`（`--format`）
 - [ ] 生成コードの使い方ガイド / ノードタイプ別実装例

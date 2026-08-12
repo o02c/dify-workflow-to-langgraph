@@ -7,10 +7,15 @@ Retrieval API, configured via environment variables:
 
 - ``DIFY_API_BASE_URL`` (e.g. ``https://api.dify.ai``)
 - ``DIFY_API_KEY`` (a dataset API key)
+- ``DIFY_RETRIEVAL_SEARCH_METHOD`` (default ``semantic_search``; the Dify
+  ``/retrieve`` API requires a search method, and the Node DSL does not carry one
+  -- it is a dataset/deploy concern. Use ``keyword_search`` / ``full_text_search``
+  / ``hybrid_search`` for datasets without an embedding model.)
+- ``DIFY_RETRIEVAL_TOP_K`` (default ``4``)
 
-When those are unset the default adapter is a no-op that returns ``[]`` and logs a
-warning, so the generated graph still runs end-to-end before retrieval is wired up.
-Depends only on the standard library.
+When ``DIFY_API_BASE_URL`` / ``DIFY_API_KEY`` are unset the default adapter is a
+no-op that returns ``[]`` and logs a warning, so the generated graph still runs
+end-to-end before retrieval is wired up. Depends only on the standard library.
 """
 
 import json
@@ -66,13 +71,33 @@ class DifyApiRetriever:
             records.extend(self._retrieve_one(dataset_id, query, kwargs))
         return records
 
+    def _retrieval_model(self, override: dict[str, Any] | None) -> dict[str, Any]:
+        """Build a complete retrieval_model for the /retrieve API.
+
+        The API requires ``search_method`` / ``reranking_enable`` / ``top_k`` /
+        ``score_threshold_enabled`` together, but the Node DSL only carries a subset
+        (top_k, score_threshold). We default the rest here -- ``search_method`` from
+        the environment, since it is a dataset/deploy concern -- and overlay whatever
+        the Node config provided.
+        """
+        model: dict[str, Any] = {
+            "search_method": os.getenv("DIFY_RETRIEVAL_SEARCH_METHOD", "semantic_search"),
+            "reranking_enable": False,
+            "top_k": int(os.getenv("DIFY_RETRIEVAL_TOP_K") or 4),
+            "score_threshold_enabled": False,
+        }
+        if override:
+            model.update({k: v for k, v in override.items() if v is not None})
+        return model
+
     def _retrieve_one(
         self, dataset_id: str, query: str, kwargs: dict[str, Any]
     ) -> list[dict[str, Any]]:
         url = f"{self.base_url}/v1/datasets/{dataset_id}/retrieve"
-        payload: dict[str, Any] = {"query": query}
-        if "retrieval_model" in kwargs:
-            payload["retrieval_model"] = kwargs["retrieval_model"]
+        payload: dict[str, Any] = {
+            "query": query,
+            "retrieval_model": self._retrieval_model(kwargs.get("retrieval_model")),
+        }
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),

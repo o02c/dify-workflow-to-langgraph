@@ -65,7 +65,49 @@ class TestDifyApiRetriever:
         assert captured["url"] == "https://api.dify.ai/v1/datasets/ds-1/retrieve"
         assert captured["method"] == "POST"
         assert captured["auth"] == "Bearer secret"
-        assert captured["body"] == {"query": "my query"}
+        # The /retrieve API requires a complete retrieval_model; the adapter fills
+        # the required fields (search_method from env, defaulting to semantic_search).
+        assert captured["body"] == {
+            "query": "my query",
+            "retrieval_model": {
+                "search_method": "semantic_search",
+                "reranking_enable": False,
+                "top_k": 4,
+                "score_threshold_enabled": False,
+            },
+        }
+
+    def test_search_method_and_top_k_from_env(self, monkeypatch):
+        """search_method / top_k are dataset/deploy concerns, driven by env."""
+        monkeypatch.setenv("DIFY_RETRIEVAL_SEARCH_METHOD", "keyword_search")
+        monkeypatch.setenv("DIFY_RETRIEVAL_TOP_K", "7")
+        captured: dict = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return _FakeResponse({"records": []})
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        DifyApiRetriever(base_url="https://api.dify.ai", api_key="k").retrieve("q", ["d"])
+        assert captured["body"]["retrieval_model"]["search_method"] == "keyword_search"
+        assert captured["body"]["retrieval_model"]["top_k"] == 7
+
+    def test_node_retrieval_model_overrides_defaults(self, monkeypatch):
+        """A retrieval_model passed by the node overlays the adapter defaults."""
+        captured: dict = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return _FakeResponse({"records": []})
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        DifyApiRetriever(base_url="https://api.dify.ai", api_key="k").retrieve(
+            "q", ["d"], retrieval_model={"top_k": 2, "score_threshold_enabled": True}
+        )
+        model = captured["body"]["retrieval_model"]
+        assert model["top_k"] == 2  # node override wins
+        assert model["score_threshold_enabled"] is True
+        assert model["search_method"] == "semantic_search"  # default kept
 
     def test_network_error_returns_empty(self, monkeypatch):
         """A retrieval failure is swallowed so it can't crash the graph."""

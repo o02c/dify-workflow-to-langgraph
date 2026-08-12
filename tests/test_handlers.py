@@ -187,3 +187,32 @@ class TestKnowledgeRetrievalBody:
         handler = get_handler("knowledge-retrieval")
         assert handler.body_imports(node) == ["from ..retriever import get_retriever"]
         assert handler.emits_stub_body is False
+
+    def test_no_retrieval_model_when_config_absent(self):
+        """A node without multiple_retrieval_config emits no retrieval_model kwarg.
+
+        The adapter then fills all required fields itself (search_method from env).
+        """
+        graph = DifyDSLParser().parse_file(FIXTURES_DIR / "guardduty_handler.yml")
+        node = graph.nodes["1722397470145"]
+        call = get_handler(node.type).stub_output(node, graph)["result"]
+        assert "retrieval_model=" not in call
+
+    def test_projects_top_k_and_score_threshold_from_config(self):
+        """multiple_retrieval_config (top_k, score_threshold) projects into the call."""
+        node = _node(
+            "knowledge-retrieval",
+            {
+                "query_variable_selector": ["start", "q"],
+                "dataset_ids": ["ds-1"],
+                "multiple_retrieval_config": {"top_k": 5, "score_threshold": 0.6},
+            },
+        )
+        # Minimal graph containing the referenced 'start' node so the query resolves.
+        graph = DifyDSLParser().parse({"workflow": {"graph": {"nodes": [
+            {"id": "start", "data": {"type": "start"}},
+        ], "edges": []}}})
+        call = get_handler(node.type).stub_output(node, graph)["result"]
+        assert "'top_k': 5" in call
+        assert "'score_threshold_enabled': True" in call
+        assert "'score_threshold': 0.6" in call
