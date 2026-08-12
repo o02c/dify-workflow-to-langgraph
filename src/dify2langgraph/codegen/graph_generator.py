@@ -34,14 +34,14 @@ def generate_graph_file(
         "",
         "from langgraph.graph import END, START, StateGraph",
         "",
-        "from state import GraphState",
+        "from .state import GraphState",
     ]
 
     # Import node functions
     node_funcs = [get_node_names(n.id, node_name_map)[0] for n in graph.nodes.values()]
     if node_funcs:
         imports = ", ".join(sorted(node_funcs))
-        lines.append(f"from nodes import {imports}")
+        lines.append(f"from .nodes import {imports}")
 
     # Router functions for Branching Nodes (ADR-0003)
     branching_nodes = [n for n in graph.nodes.values() if is_branching(n)]
@@ -109,23 +109,9 @@ def generate_graph_file(
         end_func, _ = get_node_names(end_node_id, node_name_map)
         lines.append(f'    graph.add_edge("{end_func}", END)')
 
-    # Use start node's name for example input
-    if graph.start_node_id:
-        start_func, _ = get_node_names(graph.start_node_id, node_name_map)
-    else:
-        start_func = "start"
-
     lines.extend([
         "",
         "    return graph.compile()",
-        "",
-        "",
-        'if __name__ == "__main__":',
-        "    workflow = build_graph()",
-        "    # Example: provide input for the start node",
-        f'    initial_state: GraphState = {{"{start_func}": {{}}}}',
-        "    result = workflow.invoke(initial_state)",
-        "    print(result)",
         "",
     ])
 

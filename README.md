@@ -47,7 +47,10 @@ uv sync
 uv run dify2langgraph workflow.yml -o output/
 
 ls output/workflow/
-# state.py  graph.py  llm.py  nodes/
+# __init__.py  __main__.py  state.py  graph.py  llm.py  nodes/
+
+# 生成物は自己完結パッケージ (相対 import)。親ディレクトリから実行:
+cd output && python -m workflow   # ADR-0007
 ```
 
 ### CLI オプション

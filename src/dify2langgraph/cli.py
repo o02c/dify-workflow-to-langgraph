@@ -11,6 +11,7 @@ from pathlib import Path
 from dify2langgraph.codegen import (
     generate_graph_file,
     generate_nodes_directory,
+    generate_package_files,
     generate_state_file,
 )
 from dify2langgraph.logging_config import get_logger
@@ -49,6 +50,7 @@ def translate(
     generate_state_file(graph, output_dir, node_name_map)
     generate_nodes_directory(graph, output_dir, node_name_map)
     generate_graph_file(graph, output_dir, node_name_map)
+    generate_package_files(graph, output_dir, node_name_map)
 
     # Copy template files
     copy_templates(output_dir)
@@ -66,6 +68,10 @@ def copy_templates(output_dir: Path) -> None:
         return
 
     for template_file in TEMPLATES_DIR.glob("*.py"):
+        # Skip dunder files (e.g. the templates package's own __init__.py) so we
+        # don't clobber the generated package's __init__.py.
+        if template_file.name.startswith("__"):
+            continue
         dest = output_dir / template_file.name
         shutil.copy(template_file, dest)
         logger.info("Copied: %s", dest)

@@ -14,14 +14,18 @@ from dify2langgraph.cli import translate
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
-# Snippet run inside the generated output dir: build the graph, invoke it with a
-# minimal initial state, and print the resulting state as JSON.
+# Name of the generated package directory (a valid Python identifier so it can be
+# imported as a package, exercising the relative imports -- ADR-0007).
+_PKG = "wf"
+
+# Snippet run from the package's parent dir: import the generated package, invoke
+# its graph with a minimal initial state, and print the resulting state as JSON.
 _RUN_SNIPPET = """
 import json
 import sys
 
 sys.path.insert(0, ".")
-from graph import build_graph
+from wf import build_graph
 
 result = build_graph().invoke({initial})
 print(json.dumps(result))
@@ -29,17 +33,21 @@ print(json.dumps(result))
 
 
 def _generate_and_run(output_dir: Path, fixture: str, initial: dict) -> dict:
-    """Generate code for a fixture, run its graph, and return the final state.
+    """Generate a fixture into a package, run it as `python -m`-style, return state.
+
+    Generates into ``output_dir/wf`` (a self-contained package) and imports it as
+    ``wf`` from ``output_dir`` -- so the run exercises the generated relative
+    imports, not a sys.path hack.
 
     Args:
-        output_dir: Directory to generate into (and run from).
+        output_dir: Parent directory; the package is generated into ``output_dir/wf``.
         fixture: Fixture filename under tests/fixtures/.
         initial: Initial state passed to the compiled graph's invoke().
 
     Returns:
         The final GraphState after invocation (node key -> output dict).
     """
-    translate(FIXTURES_DIR / fixture, output_dir)
+    translate(FIXTURES_DIR / fixture, output_dir / _PKG)
 
     snippet = _RUN_SNIPPET.format(initial=repr(initial))
     proc = subprocess.run(

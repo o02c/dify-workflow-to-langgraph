@@ -173,16 +173,21 @@ def llm_node(state: GraphState) -> Command:
 
 ### Generated Output Structure
 
+A self-contained package with relative imports (ADR-0007), run via
+`python -m <package>` from the parent directory:
+
 ```
-output/
-├── state.py          # GraphState and node output TypedDicts
-├── graph.py          # Graph construction and compilation
-├── llm.py            # LLM configuration (copied from templates)
+output/workflow/       # a Python package (dir name must be a valid identifier)
+├── __init__.py        # Re-exports build_graph
+├── __main__.py        # Run entry point (python -m workflow)
+├── state.py           # GraphState and node output TypedDicts
+├── graph.py           # Graph construction and compilation
+├── llm.py             # LLM configuration (copied from templates)
 └── nodes/
-    ├── __init__.py   # Re-exports all node functions
-    ├── start.py      # Start node
-    ├── process.py    # Processing nodes
-    └── end.py        # End node
+    ├── __init__.py    # Re-exports all node functions
+    ├── start.py       # Start node
+    ├── process.py     # Processing nodes
+    └── end.py         # End node
 ```
 
 ## Import Convention
@@ -198,8 +203,9 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
-# Local
-from state import GraphState, NodeOutput
+# Local (relative, within the generated package -- ADR-0007)
+from ..state import GraphState, NodeOutput  # in nodes/*.py
+# from .state import GraphState             # in graph.py
 ```
 
 ## Logging Convention

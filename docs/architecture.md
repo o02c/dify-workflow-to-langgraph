@@ -32,7 +32,8 @@ src/dify2langgraph/
 │   ├── routing.py        # Structural branch-map helpers (ADR-0003)
 │   ├── state_generator.py    # GraphState generation
 │   ├── node_generator.py     # Node file generation
-│   └── graph_generator.py    # Graph construction code
+│   ├── graph_generator.py    # Graph construction code
+│   └── package_generator.py  # __init__.py / __main__.py (self-contained package, ADR-0007)
 ├── generator/            # LLM-based code generation
 │   ├── __init__.py
 │   └── engine.py         # Code generation engine
@@ -126,8 +127,12 @@ WorkflowGraph
     ↓
 ├── generate_state_file() → state.py
 ├── generate_nodes_directory() → nodes/*.py
-└── generate_graph_file() → graph.py
+├── generate_graph_file() → graph.py
+└── generate_package_files() → __init__.py, __main__.py
 ```
+
+The output is a self-contained package with relative imports, run via
+`python -m <package>` ([ADR-0007](./adr/0007-generated-output-is-a-self-contained-package.md)).
 
 ### Optional LLM Enhancement
 

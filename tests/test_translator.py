@@ -248,3 +248,42 @@ class TestTranslate:
 
             graph_content = (output_dir / "graph.py").read_text()
             compile(graph_content, "graph.py", "exec")
+
+
+class TestSelfContainedPackage:
+    """The generated output is a package with relative imports (ADR-0007)."""
+
+    def test_emits_package_files(self):
+        """__init__.py and __main__.py are generated for the output package."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
+
+            init_content = (output_dir / "__init__.py").read_text()
+            assert "from .graph import build_graph" in init_content
+
+            main_content = (output_dir / "__main__.py").read_text()
+            assert "from .graph import build_graph" in main_content
+            assert "workflow.invoke(initial_state)" in main_content
+
+    def test_graph_uses_relative_imports(self):
+        """graph.py imports state/nodes as siblings, not top-level modules."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
+
+            content = (output_dir / "graph.py").read_text()
+            assert "from .state import GraphState" in content
+            assert "from .nodes import " in content
+            # No standalone-run demo (moved to __main__.py).
+            assert 'if __name__ == "__main__"' not in content
+
+    def test_node_files_use_relative_imports_without_sys_path(self):
+        """Node files import the parent package's state, no sys.path hack."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
+
+            content = (output_dir / "nodes" / "llm_node.py").read_text()
+            assert "from ..state import GraphState" in content
+            assert "sys.path" not in content
