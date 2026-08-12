@@ -7,6 +7,11 @@ import json
 from pathlib import Path
 
 from dify2langgraph.codegen.naming import get_node_names
+from dify2langgraph.codegen.routing import (
+    decision_field,
+    default_branch_key,
+    is_branching_node,
+)
 from dify2langgraph.codegen.state_generator import get_node_output_fields
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
@@ -60,7 +65,7 @@ def generate_nodes_directory(
 
     # Generate individual node files
     for node in sorted_nodes:
-        _generate_node_file(node, nodes_dir, node_name_map)
+        _generate_node_file(node, nodes_dir, graph, node_name_map)
 
     # Generate __init__.py that re-exports all node functions
     _generate_nodes_init(sorted_nodes, nodes_dir, node_name_map)
@@ -71,6 +76,7 @@ def generate_nodes_directory(
 def _generate_node_file(
     node: NodeInfo,
     nodes_dir: Path,
+    graph: WorkflowGraph,
     node_name_map: dict[str, tuple[str, str]] | None = None,
 ) -> None:
     """Generate a single node file.
@@ -78,6 +84,7 @@ def _generate_node_file(
     Args:
         node: NodeInfo instance.
         nodes_dir: The nodes/ directory path.
+        graph: Parsed workflow graph (used to pick a branching node's default branch).
         node_name_map: Optional mapping of node_id -> (snake_case, CamelCase).
     """
     func_name, class_name = get_node_names(node.id, node_name_map)
@@ -169,9 +176,21 @@ def _generate_node_file(
     lines.append(f"    # TODO: Implement {node.type} node logic")
     lines.append("    # See NODE_CONFIG for full Dify configuration details")
     lines.append("")
+    # For a Branching Node, default the decision field to a real branch key so
+    # the generated router (ADR-0003) resolves to a valid successor and the graph
+    # runs end-to-end before the body is implemented.
+    branch_default = None
+    branch_field = None
+    if is_branching_node(node):
+        branch_field = decision_field(node)
+        branch_default = default_branch_key(graph, node.id)
+
     lines.append(f"    output: {class_name} = {{")
     for field_name, field_type in output_fields.items():
-        placeholder = _get_placeholder_value(field_type)
+        if field_name == branch_field and branch_default is not None:
+            placeholder = repr(branch_default)
+        else:
+            placeholder = _get_placeholder_value(field_type)
         lines.append(f'        "{field_name}": {placeholder},')
     lines.append("    }")
     lines.append("")

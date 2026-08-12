@@ -142,6 +142,49 @@ class TestGenerateGraphFile:
             assert 'graph.add_node("start_node"' in content
             assert "graph.add_edge(START," in content
 
+    def test_branching_node_uses_conditional_edges(self):
+        """A question-classifier is wired with a router + add_conditional_edges (ADR-0003)."""
+        parser = DifyDSLParser()
+        graph = parser.parse_file(FIXTURES_DIR / "guardduty_handler.yml")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            generate_graph_file(graph, output_dir)
+
+            content = (output_dir / "graph.py").read_text()
+            # A router function reads the classifier's decision field.
+            assert "def route_node_1722397570856(state: GraphState) -> str:" in content
+            assert 'return state["node_1722397570856"]["class_id"]' in content
+            # The branch is wired conditionally, mapping each sourceHandle to a target.
+            assert (
+                'graph.add_conditional_edges("node_1722397570856", '
+                "route_node_1722397570856, " in content
+            )
+            assert "'1': 'node_1722397470145'" in content
+            assert "'1722398080959': 'node_1722399356175'" in content
+            # The branch targets must NOT also be reached via a plain fan-out edge.
+            assert 'graph.add_edge("node_1722397570856"' not in content
+
+    def test_if_else_uses_selected_branch_router(self):
+        """An if-else routes on selected_branch with true/false handles (ADR-0003)."""
+        parser = DifyDSLParser()
+        graph = parser.parse_file(FIXTURES_DIR / "ifelse_workflow.yml")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            generate_graph_file(graph, output_dir)
+
+            content = (output_dir / "graph.py").read_text()
+            assert "def route_ifelse_node(state: GraphState) -> str:" in content
+            assert 'return state["ifelse_node"]["selected_branch"]' in content
+            assert (
+                'graph.add_conditional_edges("ifelse_node", route_ifelse_node, '
+                in content
+            )
+            assert "'true': 'end_true'" in content
+            assert "'false': 'end_false'" in content
+            assert 'graph.add_edge("ifelse_node"' not in content
+
 
 class TestTranslate:
     """Integration tests for the translate function."""

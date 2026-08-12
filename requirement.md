@@ -16,8 +16,8 @@ Dify のワークフロー DSL (YAML) を解析し、実行可能で型安全な
 
 ## 3. Scope (v1)
 - **構造レイヤー**は全ノードで正しく生成することを目標とする。
-  - ⚠️ 分岐（`add_conditional_edges`, ADR-0003）は**未実装**。現状は全分岐を素の `add_edge` で吐くため両分岐が発火するバグがある（`tests/test_generated.py` の strict-xfail で追跡）。v1 の最優先タスク。
-- **ノード本体**は `start` / `llm` / `end` を実装済み。`question-classifier` / `if-else` を含む他タイプは Stub（Handler 化は ADR-0005、未実装）。
+  - 分岐（`add_conditional_edges`, ADR-0003）は **実装済み**。`question-classifier` / `if-else` に対し `route_<node>` 関数と条件エッジを生成（`codegen/routing.py`）。`tests/test_generated.py` で単一分岐到達を検証。
+- **ノード本体**は `start` / `llm` / `end` を実装済み。`question-classifier` / `if-else` を含む他タイプは Stub（Handler 化は ADR-0005、未実装）。分岐 Stub は決定フィールドを先頭ブランチにデフォルトするため、本体未実装でもグラフは単一経路で走る。
 - 未対応・保留は「Deferred」（[TODO.md](./TODO.md)）参照。
 
 ## 4. Implementation Requirements
