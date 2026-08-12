@@ -28,6 +28,18 @@ from typing import Any, Protocol, runtime_checkable
 logger = logging.getLogger(__name__)
 
 
+def _env_top_k(default: int = 4) -> int:
+    """Parse DIFY_RETRIEVAL_TOP_K, warning (not silently failing) on a bad value."""
+    raw = os.getenv("DIFY_RETRIEVAL_TOP_K")
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid DIFY_RETRIEVAL_TOP_K=%r; using %d", raw, default)
+        return default
+
+
 @runtime_checkable
 class Retriever(Protocol):
     """Port: retrieve records for a query from one or more datasets."""
@@ -83,7 +95,7 @@ class DifyApiRetriever:
         model: dict[str, Any] = {
             "search_method": os.getenv("DIFY_RETRIEVAL_SEARCH_METHOD", "semantic_search"),
             "reranking_enable": False,
-            "top_k": int(os.getenv("DIFY_RETRIEVAL_TOP_K") or 4),
+            "top_k": _env_top_k(),
             "score_threshold_enabled": False,
         }
         if override:

@@ -109,6 +109,38 @@ class TestDifyApiRetriever:
         assert model["score_threshold_enabled"] is True
         assert model["search_method"] == "semantic_search"  # default kept
 
+    def test_zero_valued_overrides_survive(self, monkeypatch):
+        """top_k=0 / score_threshold=0.0 overlay (merge uses `is not None`, not truthiness)."""
+        captured: dict = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return _FakeResponse({"records": []})
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        DifyApiRetriever(base_url="https://api.dify.ai", api_key="k").retrieve(
+            "q", ["d"], retrieval_model={"top_k": 0, "score_threshold": 0.0}
+        )
+        model = captured["body"]["retrieval_model"]
+        assert model["top_k"] == 0
+        assert model["score_threshold"] == 0.0
+
+    def test_invalid_top_k_env_falls_back_with_warning(self, monkeypatch):
+        """A non-int DIFY_RETRIEVAL_TOP_K falls back to 4 rather than crashing to []."""
+        monkeypatch.setenv("DIFY_RETRIEVAL_TOP_K", "not-a-number")
+        captured: dict = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return _FakeResponse({"records": [{"segment": {"content": "x"}}]})
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        records = DifyApiRetriever(base_url="https://api.dify.ai", api_key="k").retrieve(
+            "q", ["d"]
+        )
+        assert records == [{"segment": {"content": "x"}}]  # not swallowed to []
+        assert captured["body"]["retrieval_model"]["top_k"] == 4
+
     def test_network_error_returns_empty(self, monkeypatch):
         """A retrieval failure is swallowed so it can't crash the graph."""
 
