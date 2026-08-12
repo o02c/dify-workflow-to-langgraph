@@ -92,6 +92,12 @@ def _generate_node_file(
         "from langgraph.types import Command",
         "",
         f"from ..state import GraphState, {class_name}",
+    ]
+
+    # Extra imports the handler's body needs (e.g. the Retriever port, ADR-0006).
+    lines.extend(handler.body_imports(node))
+
+    lines += [
         "",
         "# Full node configuration from Dify DSL (for reference)",
         f"NODE_CONFIG_JSON = '''{config_json}'''",

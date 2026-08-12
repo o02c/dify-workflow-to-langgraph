@@ -47,11 +47,16 @@ uv sync
 uv run dify2langgraph workflow.yml -o output/
 
 ls output/workflow/
-# __init__.py  __main__.py  state.py  graph.py  llm.py  nodes/
+# __init__.py  __main__.py  state.py  graph.py  llm.py  retriever.py  nodes/
 
 # 生成物は自己完結パッケージ (相対 import)。親ディレクトリから実行:
 cd output && python -m workflow   # ADR-0007
 ```
+
+RAG (knowledge-retrieval) ノードは `Retriever` ポート経由で Dify の Retrieval API を
+呼び出す（[ADR-0006](docs/adr/0006-retrieval-via-dify-api-behind-a-port.md)）。
+`DIFY_API_BASE_URL` / `DIFY_API_KEY` を設定すると有効化され、未設定なら空結果を返して
+グラフはそのまま走る。
 
 ### CLI オプション
 
