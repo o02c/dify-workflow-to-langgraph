@@ -16,6 +16,7 @@ Structural (type-agnostic) routing helpers -- deriving the branch map from the
 DSL ``sourceHandle`` -- live in :mod:`dify2langgraph.codegen.routing`.
 """
 
+from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.codegen.routing import default_branch_key
 from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
 
@@ -49,13 +50,25 @@ class NodeHandler:
     node_type: str = "*"
     is_branching: bool = False
     decision_field: str | None = None
+    # False when the handler emits a real deterministic body (not a TODO Stub).
+    emits_stub_body: bool = True
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
         """Field name -> type annotation for this node's Node Output."""
         return {"output": "Any"}
 
-    def stub_output(self, node: NodeInfo, graph: WorkflowGraph) -> dict[str, str]:
-        """Field name -> Python literal for the Stub body's output dict."""
+    def stub_output(
+        self,
+        node: NodeInfo,
+        graph: WorkflowGraph,
+        node_name_map: dict[str, tuple[str, str]] | None = None,
+    ) -> dict[str, str]:
+        """Field name -> Python expression for the node body's output dict.
+
+        The base implementation emits placeholder literals (a Stub). Handlers may
+        override to emit real expressions (e.g. the End node forwards upstream
+        values via normalized state accesses, ADR-0004).
+        """
         return {
             name: placeholder_literal(ftype)
             for name, ftype in self.output_fields(node).items()
@@ -119,6 +132,7 @@ class VariableAggregatorHandler(NodeHandler):
 
 class EndHandler(NodeHandler):
     node_type = "end"
+    emits_stub_body = False  # deterministic: forwards upstream values (ADR-0004)
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
         fields: dict[str, str] = {}
@@ -127,6 +141,32 @@ class EndHandler(NodeHandler):
             if name:
                 fields[name] = "Any"
         return fields or {"result": "Any"}
+
+    def stub_output(
+        self,
+        node: NodeInfo,
+        graph: WorkflowGraph,
+        node_name_map: dict[str, tuple[str, str]] | None = None,
+    ) -> dict[str, str]:
+        # The End node is deterministic: each declared output's value_selector
+        # [node_id, field...] forwards an upstream value via a normalized canonical
+        # state access (ADR-0004). Selectors into non-Node namespaces (sys/env,
+        # deferred) or unknown nodes fall back to a placeholder.
+        result: dict[str, str] = {}
+        for output in node.data.get("outputs", []):
+            name = output.get("variable", "")
+            if not name:
+                continue
+            selector = output.get("value_selector") or []
+            if len(selector) >= 2 and selector[0] in graph.nodes:
+                key, _ = get_node_names(str(selector[0]), node_name_map)
+                access = f'state["{key}"]'
+                for part in selector[1:]:
+                    access += f'["{part}"]'
+                result[name] = access
+            else:
+                result[name] = "None"
+        return result or {"result": "None"}
 
 
 class AnswerHandler(NodeHandler):
@@ -152,8 +192,13 @@ class _BranchingHandler(NodeHandler):
 
     is_branching = True
 
-    def stub_output(self, node: NodeInfo, graph: WorkflowGraph) -> dict[str, str]:
-        output = super().stub_output(node, graph)
+    def stub_output(
+        self,
+        node: NodeInfo,
+        graph: WorkflowGraph,
+        node_name_map: dict[str, tuple[str, str]] | None = None,
+    ) -> dict[str, str]:
+        output = super().stub_output(node, graph, node_name_map)
         key = default_branch_key(graph, node.id)
         if key is not None and self.decision_field:
             output[self.decision_field] = repr(key)

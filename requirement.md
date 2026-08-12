@@ -23,7 +23,7 @@ Dify のワークフロー DSL (YAML) を解析し、実行可能で型安全な
 ## 4. Implementation Requirements
 決定は ADR に集約。要点のみ:
 
-- **Parser**: `nodes` から全 `id` を抽出し、value_selector 配列と `{{#id.field#}}` の両構文からノード間依存を特定（ADR-0004）。
+- **Parser**: `nodes` から全 `id` を抽出し、value_selector 配列と `{{#id.field#}}` の両構文からノード間依存を特定。両構文は正準アクセス `state["node_<id>"]["field"]` に正規化済み（数値 ID も `node_<id>` に統一、ADR-0004）。End ノードは value_selector を正規化アクセスに変換した決定論的本体を生成。`{{#context#}}`・`sys`・`env` は保留。
 - **State**: `TypedDict(total=False)` の `GraphState`。正準キーは `node_<dify_node_id>`（ADR-0002）。`sys` は予約キー、`env` は生成 `env.py` の定数（ADR-0004）。
 - **Codegen**: ノードタイプごとの Node Handler（`codegen/handlers.py`）が `output_fields` / `stub_output` と分岐情報（`is_branching` / `decision_field`）を担う（ADR-0005）。構造的な分岐マップ導出は `codegen/routing.py`。生成物の自己完結パッケージ化（相対 import、1 ノード 1 ファイル）は目標（未実装）。
 - **LLM 後処理（任意）**: `# TODO` スタブ本体の LLM 埋め、および lint 自動修正エージェントはオプトイン（ADR-0001）。

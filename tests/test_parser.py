@@ -46,6 +46,19 @@ class TestVariableReference:
         ref = VariableReference.parse("start.inputs.query")
         assert ref.to_state_access() == 'state["start"]["inputs"]["query"]'
 
+    def test_to_state_access_numeric_id_uses_canonical_key(self):
+        """A numeric node ID normalizes to the canonical node_<id> state key."""
+        ref = VariableReference.parse("1722391426202.type")
+        assert ref.to_state_access() == 'state["node_1722391426202"]["type"]'
+
+    def test_to_state_access_respects_name_map(self):
+        """An LLM-provided name map overrides the canonical key."""
+        ref = VariableReference.parse("1722391426202.type")
+        name_map: dict[str, tuple[str, str]] = {
+            "1722391426202": ("finding_input", "FindingInput")
+        }
+        assert ref.to_state_access(name_map) == 'state["finding_input"]["type"]'
+
 
 class TestVariableReferencePattern:
     """Tests for the variable reference regex pattern."""
@@ -97,10 +110,10 @@ class TestReplaceVariableReferences:
         assert result == '{state["node1"]["a"]} + {state["node2"]["b"]}'
 
     def test_replace_with_numeric_id(self):
-        """Test replacing reference with numeric node ID."""
+        """Numeric node IDs normalize to the canonical node_<id> state key."""
         text = "Type: {{#1722391426202.type#}}"
         result = replace_variable_references(text)
-        assert result == 'Type: {state["1722391426202"]["type"]}'
+        assert result == 'Type: {state["node_1722391426202"]["type"]}'
 
     def test_no_replacement_without_reference(self):
         """Test that text without references is unchanged."""

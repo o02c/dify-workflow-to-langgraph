@@ -141,3 +141,29 @@ class TestStubOutput:
         stub = get_handler(node.type).stub_output(node, graph)
         # First outgoing branch of the if-else is the 'true' handle.
         assert stub["selected_branch"] == "'true'"
+
+
+class TestEndDeterministicBody:
+    """The End node forwards upstream values via normalized accesses (ADR-0004)."""
+
+    def test_end_forwards_value_selector_as_state_access(self):
+        graph = DifyDSLParser().parse_file(FIXTURES_DIR / "simple_workflow.yml")
+        node = graph.nodes["end_node"]
+        stub = get_handler(node.type).stub_output(node, graph)
+        assert stub == {"result": 'state["llm_node"]["text"]'}
+
+    def test_end_forwards_numeric_id_via_canonical_key(self):
+        graph = DifyDSLParser().parse_file(FIXTURES_DIR / "translation_workflow.yml")
+        node = graph.nodes["1721119092752"]
+        stub = get_handler(node.type).stub_output(node, graph)
+        assert stub == {"output": 'state["node_1721118907775"]["text"]'}
+
+    def test_end_without_outputs_defaults_to_none(self):
+        graph = DifyDSLParser().parse_file(FIXTURES_DIR / "guardduty_handler.yml")
+        node = graph.nodes["1722399235845"]
+        stub = get_handler(node.type).stub_output(node, graph)
+        assert stub == {"result": "None"}
+
+    def test_end_handler_marks_body_as_deterministic(self):
+        assert get_handler("end").emits_stub_body is False
+        assert get_handler("llm").emits_stub_body is True

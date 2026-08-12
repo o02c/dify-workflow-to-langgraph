@@ -19,6 +19,7 @@ Dify DSL YAML → Parser → Workflow Graph → Code Generator → Python Files
 src/dify2langgraph/
 ├── __init__.py           # Package entry point
 ├── cli.py                # Command-line interface
+├── naming.py             # Canonical node-name/state-key utilities (leaf module)
 ├── logging_config.py     # Centralized logging configuration
 ├── observability.py      # LangSmith tracing integration
 ├── parser/               # DSL parsing module

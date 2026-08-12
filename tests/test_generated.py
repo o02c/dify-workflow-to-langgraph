@@ -15,7 +15,7 @@ from dify2langgraph.cli import translate
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 # Snippet run inside the generated output dir: build the graph, invoke it with a
-# minimal initial state, and print the resulting state keys as JSON.
+# minimal initial state, and print the resulting state as JSON.
 _RUN_SNIPPET = """
 import json
 import sys
@@ -24,12 +24,12 @@ sys.path.insert(0, ".")
 from graph import build_graph
 
 result = build_graph().invoke({initial})
-print(json.dumps(sorted(result.keys())))
+print(json.dumps(result))
 """
 
 
-def _generate_and_run(output_dir: Path, fixture: str, initial: dict) -> list[str]:
-    """Generate code for a fixture, run its graph, and return the result keys.
+def _generate_and_run(output_dir: Path, fixture: str, initial: dict) -> dict:
+    """Generate code for a fixture, run its graph, and return the final state.
 
     Args:
         output_dir: Directory to generate into (and run from).
@@ -37,7 +37,7 @@ def _generate_and_run(output_dir: Path, fixture: str, initial: dict) -> list[str
         initial: Initial state passed to the compiled graph's invoke().
 
     Returns:
-        Sorted list of state keys present after invocation.
+        The final GraphState after invocation (node key -> output dict).
     """
     translate(FIXTURES_DIR / fixture, output_dir)
 
@@ -57,19 +57,30 @@ class TestGeneratedGraphRuns:
 
     def test_simple_workflow_runs(self, tmp_path):
         """A linear start -> llm -> end graph builds, invokes, and visits every node."""
-        keys = _generate_and_run(
+        state = _generate_and_run(
             tmp_path, "simple_workflow.yml", {"start_node": {}}
         )
-        assert keys == ["end_node", "llm_node", "start_node"]
+        assert sorted(state) == ["end_node", "llm_node", "start_node"]
+
+    def test_end_node_forwards_upstream_value(self, tmp_path):
+        """The End node deterministically forwards an upstream field (ADR-0004).
+
+        Its ``result`` output is wired to ``state["llm_node"]["text"]``, so after a
+        run the End output equals the LLM node's text rather than a placeholder.
+        """
+        state = _generate_and_run(
+            tmp_path, "simple_workflow.yml", {"start_node": {}}
+        )
+        assert state["end_node"]["result"] == state["llm_node"]["text"]
 
     def test_guardduty_workflow_runs(self, tmp_path):
         """A branching workflow with RAG/tool nodes still builds and invokes."""
-        keys = _generate_and_run(
+        state = _generate_and_run(
             tmp_path, "guardduty_handler.yml", {"node_1722391426202": {}}
         )
         # Every node currently gets a stub, so invocation completes without error.
-        assert "node_1722391426202" in keys  # start
-        assert "node_1722397570856" in keys  # question-classifier
+        assert "node_1722391426202" in state  # start
+        assert "node_1722397570856" in state  # question-classifier
 
     def test_question_classifier_routes_to_single_branch(self, tmp_path):
         """A question-classifier reaches exactly one of its downstream ends.
@@ -78,13 +89,13 @@ class TestGeneratedGraphRuns:
         (``class_id``) to the first branch key, so the router resolves to a single
         successor instead of fanning out to every branch.
         """
-        keys = _generate_and_run(
+        state = _generate_and_run(
             tmp_path, "guardduty_handler.yml", {"node_1722391426202": {}}
         )
         # The two end nodes are the two branches of the classifier; only one
         # should be reached now that routing is correct.
         ends = {"node_1722399235845", "node_1722399356175"}
-        assert len(ends & set(keys)) == 1
+        assert len(ends & set(state)) == 1
 
     def test_if_else_routes_to_single_branch(self, tmp_path):
         """An if-else reaches exactly one of its true/false branches.
@@ -92,11 +103,11 @@ class TestGeneratedGraphRuns:
         The stub defaults ``selected_branch`` to the first branch key (``true``),
         so the router resolves to a single successor instead of fanning out.
         """
-        keys = _generate_and_run(
+        state = _generate_and_run(
             tmp_path, "ifelse_workflow.yml", {"start_node": {}}
         )
         ends = {"end_true", "end_false"}
-        assert len(ends & set(keys)) == 1
+        assert len(ends & set(state)) == 1
 
 
 class TestRealWorkflows:
@@ -104,10 +115,10 @@ class TestRealWorkflows:
 
     def test_translation_workflow_routes_to_single_if_else_branch(self, tmp_path):
         """A real workflow with an if-else reaches exactly one branch target."""
-        keys = _generate_and_run(tmp_path, "translation_workflow.yml", {})
+        state = _generate_and_run(tmp_path, "translation_workflow.yml", {})
         # if-else 1721118545228: 'true' -> ...559807, 'false' -> ...668192.
         branches = {"node_1721118559807", "node_1721118668192"}
-        assert len(branches & set(keys)) == 1
+        assert len(branches & set(state)) == 1
 
     def test_json_translate_workflow_builds_and_runs(self, tmp_path):
         """A real workflow using code/tool/iteration still builds and invokes.
@@ -115,5 +126,5 @@ class TestRealWorkflows:
         Iteration internals are stubbed via the fallback handler (ADR-0005 leaves
         the iteration shape open), but the graph must still compile and run.
         """
-        keys = _generate_and_run(tmp_path, "json_translate.yml", {})
-        assert "node_1731659178787" in keys  # start node ran
+        state = _generate_and_run(tmp_path, "json_translate.yml", {})
+        assert "node_1731659178787" in state  # start node ran

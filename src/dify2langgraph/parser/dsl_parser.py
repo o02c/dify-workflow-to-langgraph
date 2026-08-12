@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 
+from dify2langgraph.naming import sanitize_function_name
+
 # Pattern to match Dify variable references: {{#node_id.field#}} or {{#node_id.field.subfield#}}
 VARIABLE_REFERENCE_PATTERN = re.compile(r"\{\{#([^#]+)#\}\}")
 
@@ -65,12 +67,15 @@ class VariableReference:
             >>> ref = VariableReference.parse("llm_node.text")
             >>> ref.to_state_access()
             'state["llm_node"]["text"]'
+            >>> VariableReference.parse("1722391426202.type").to_state_access()
+            'state["node_1722391426202"]["type"]'
         """
-        # Use mapped name if available
+        # Use the LLM-mapped name if available, else the canonical key
+        # (ADR-0002: state["node_<id>"]), matching how GraphState keys are named.
         if node_name_map and self.node_id in node_name_map:
             state_key = node_name_map[self.node_id][0]  # snake_case
         else:
-            state_key = self.node_id
+            state_key = sanitize_function_name(self.node_id)
 
         access = f'state["{state_key}"]'
         for part in self.field_path:

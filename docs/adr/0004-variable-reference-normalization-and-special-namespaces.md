@@ -14,3 +14,23 @@ The `sys`-in-state / `env`-as-constants asymmetry is deliberate: `sys` values va
 ## Consequences
 
 - `sys` and `env` homes are reserved now, but their implementation is deferred; v1 prioritizes Node references and `context`.
+
+## Status
+
+Node-reference normalization implemented. `VariableReference.to_state_access` and
+`replace_variable_references` (`parser/dsl_parser.py`) now emit the canonical
+`state["node_<id>"]["field"]` for both syntaxes — using `sanitize_function_name` so numeric
+Dify IDs map to the same key as `GraphState` (ADR-0002), and honoring an LLM name map when
+present. The shared name logic moved to a dependency-free leaf module `dify2langgraph/naming.py`
+(re-exported by `codegen/naming.py`) so the parser and generators agree on one key without an
+import cycle.
+
+First deterministic consumer: the **End node** (`EndHandler`, ADR-0005) forwards each declared
+output's `value_selector` as a normalized access (e.g. `"result": state["llm_node"]["text"]`)
+instead of a placeholder — a real body, not a Stub. Selectors into `sys`/`env` or unknown nodes
+fall back to a placeholder (those namespaces remain deferred). `tests/test_parser.py`,
+`tests/test_handlers.py`, and `tests/test_generated.py` (End output equals the upstream value)
+cover this.
+
+Still deferred: `sys.*` / `env.*` homes, `{{#context#}}` resolution, and wiring normalized
+inputs into non-End node bodies (arrives with LLM opt-in body generation, ADR-0001).
