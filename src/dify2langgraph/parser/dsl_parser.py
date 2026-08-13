@@ -71,7 +71,7 @@ class VariableReference:
             'state["node_1722391426202"]["type"]'
         """
         # Use the LLM-mapped name if available, else the canonical key
-        # (ADR-0002: state["node_<id>"]), matching how GraphState keys are named.
+        # (state["node_<id>"]), matching how GraphState keys are named.
         if node_name_map and self.node_id in node_name_map:
             state_key = node_name_map[self.node_id][0]  # snake_case
         else:

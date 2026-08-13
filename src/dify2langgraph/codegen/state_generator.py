@@ -16,8 +16,8 @@ logger = get_logger(__name__)
 def get_node_output_fields(node: NodeInfo) -> dict[str, str]:
     """Infer output fields for a node based on its type and configuration.
 
-    Delegates to the node's :class:`~dify2langgraph.codegen.handlers.NodeHandler`
-    (ADR-0005); unknown types get a generic ``{"output": "Any"}`` from the fallback.
+    Delegates to the node's :class:`~dify2langgraph.codegen.handlers.NodeHandler`;
+    unknown types get a generic ``{"output": "Any"}`` from the fallback.
 
     Args:
         node: NodeInfo instance.

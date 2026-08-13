@@ -94,7 +94,7 @@ def _generate_node_file(
         f"from ..state import GraphState, {class_name}",
     ]
 
-    # Extra imports the handler's body needs (e.g. the Retriever port, ADR-0006).
+    # Extra imports the handler's body needs (e.g. the Retriever port).
     lines.extend(handler.body_imports(node))
 
     lines += [
@@ -142,8 +142,8 @@ def _generate_node_file(
 
     # Generate the node body. The handler owns the output values: most types emit
     # a placeholder Stub, but some (e.g. End) emit a real deterministic body that
-    # forwards upstream values (ADR-0004). A Branching Node handler defaults its
-    # decision field to a real branch key so the router (ADR-0003) resolves.
+    # forwards upstream values. A Branching Node handler defaults its decision
+    # field to a real branch key so the generated router resolves.
     if handler.emits_stub_body:
         lines.append(f"    # TODO: Implement {node.type} node logic")
         lines.append("    # See NODE_CONFIG for full Dify configuration details")
