@@ -44,6 +44,60 @@ Branching Node / Router / Node Handler / Retriever）は [CONTEXT.md](../CONTEXT
 
 ---
 
+## 2.5 どこが決定論的で、どこが LLM か
+
+**最重要の区別**。変換の中核は LLM を一切使いません。LLM は「オプトインの後処理」と
+「生成物の実行時」にだけ登場します。
+
+```mermaid
+flowchart TB
+    subgraph det["🟩 決定論的（LLM なし・常に同じ出力）"]
+      direction LR
+      PA["Parser"] --> CGN["Codegen 全体<br/>state / nodes / graph / package"]
+    end
+
+    subgraph llmopt["🟦 LLM オプトイン後処理（CLI フラグ経由・任意）"]
+      direction LR
+      NN["--name-nodes<br/>ノード名の意味的リネーム"]
+      IMPL["ノード本体実装<br/>（既定 ON, --skip-implement で無効化）"]
+      FIX["--auto-fix<br/>lint 自動修正エージェント"]
+    end
+
+    subgraph rt["🟨 生成物の実行時 LLM"]
+      RTLLM["llm ノード本体 + llm.py<br/>（実装済みノードが実行時に LLM を呼ぶ）"]
+    end
+
+    DSL["workflow.yml"] --> det
+    det --> OUT["生成パッケージ"]
+    det -. 任意 .-> llmopt
+    llmopt -. 生成コードを書き換え .-> OUT
+    OUT -->|python -m wf| rt
+```
+
+### 一覧表
+
+| 区分 | 何を | どこ（コード） | いつ動く | LLM |
+|------|------|----------------|----------|:---:|
+| 🟩 **決定論コア** | DSL 解析 | `parser/dsl_parser.py` | 常に | ✗ |
+| 🟩 | state / nodes / graph / package 生成、分岐 Router、変数正準化、End・知識取得の決定論本体 | `codegen/*`（`translate()`） | 常に | ✗ |
+| 🟦 **LLM オプトイン（変換器）** | ノード名の意味的リネーム（日本語タイトル→snake_case） | `--name-nodes` → `generator/engine.py: generate_node_names` | フラグ指定時 | ✓ |
+| 🟦 | **Stub 本体を LLM で埋める** | ノード本体実装 → `generate_all_nodes`（**既定 ON**、`--skip-implement` で無効） | 既定 / 明示無効化まで | ✓ |
+| 🟦 | 生成コードの lint エラーを自動修正 | `--auto-fix` → `agents/`（coding agent） | フラグ指定時 | ✓ |
+| 🟨 **実行時（生成物）** | `llm` ノードが推論を呼ぶ | 生成物の `nodes/*.py` + `llm.py` | `python -m wf` 実行時 | ✓ |
+
+### 押さえるべき点
+
+- **プログラマ API `translate()` は 100% 決定論的**（LLM を import すらしない）。
+  テストもこの経路を使う。同じ DSL → 常に同じコード。
+- **CLI の既定はノード本体を LLM で実装する**（`--skip-implement` で純決定論の Stub のみ出力）。
+  つまり「決定論だけで欲しい」なら `--skip-implement` を付ける。
+- Stub 本体は `# TODO` プレースホルダ。LLM オプトインはこの穴を埋める後処理であって、
+  構造（state キー・エッジ・分岐配線）は決定論コアが確定済み → LLM は構造を壊せない（[ADR-0001](./adr/0001-deterministic-core-llm-as-opt-in-postprocessing.md)）。
+- 例外的に **`end` と `knowledge-retrieval` は決定論的な実本体**を持つ（Stub ではない）。
+  ここは LLM 不要で、変数参照転送 / Retriever 呼び出しがそのまま生成される。
+
+---
+
 ## 3. アーキテクチャ（変換器の内部）
 
 `src/dify2langgraph/` がトランスパイラ本体。生成される成果物とは別物なので注意。
@@ -84,14 +138,20 @@ flowchart TB
 
 ### ノード種別 → ハンドラの対応（v1）
 
+本体が「Stub」のものは決定論コアがプレースホルダを出力し、LLM オプトインで穴埋め対象になる。
+「決定論的」のものは LLM 不要で実本体まで生成される（§2.5 参照）。
+
 | 種別 | 出力 | 本体 |
 |------|------|------|
-| `start` | 宣言変数から導出 | Stub（入力値） |
-| `end` | 宣言 outputs | **決定論的**（value_selector を上流参照に変換, [ADR-0004](./adr/0004-variable-reference-normalization-and-special-namespaces.md)） |
-| `knowledge-retrieval` | `result: list[dict]` | **決定論的**（Retriever ポート呼び出し, [ADR-0006](./adr/0006-retrieval-via-dify-api-behind-a-port.md)） |
-| `question-classifier` / `if-else` | 分類/分岐フィールド | Stub（+ **Router** を graph.py に生成, [ADR-0003](./adr/0003-conditional-branching-via-generated-routers.md)） |
-| `llm` / `code` / `tool` / `template-transform` / `variable-aggregator` / `answer` / `agent` | 型付き | Stub |
-| その他（未登録） | `output: Any` | 汎用 Stub にフォールバック |
+| `start` | 宣言変数から導出 | 🟦 Stub（入力値） |
+| `end` | 宣言 outputs | 🟩 **決定論的**（value_selector を上流参照に変換, [ADR-0004](./adr/0004-variable-reference-normalization-and-special-namespaces.md)） |
+| `knowledge-retrieval` | `result: list[dict]` | 🟩 **決定論的**（Retriever ポート呼び出し, [ADR-0006](./adr/0006-retrieval-via-dify-api-behind-a-port.md)） |
+| `question-classifier` / `if-else` | 分類/分岐フィールド | 🟦 Stub 本体 ＋ 🟩 **Router を graph.py に決定論生成**, [ADR-0003](./adr/0003-conditional-branching-via-generated-routers.md) |
+| `llm` / `code` / `tool` / `template-transform` / `variable-aggregator` / `answer` / `agent` | 型付き | 🟦 Stub |
+| その他（未登録） | `output: Any` | 🟦 汎用 Stub にフォールバック |
+
+> 🟩 = 決定論的な実本体まで生成 / 🟦 = 決定論コアは Stub、LLM オプトインで穴埋め対象。
+> なお分岐ノードは「本体は Stub だが、分岐の**配線**（Router）は決定論的」という混在。
 
 ---
 
