@@ -4,6 +4,7 @@ Dify のワークフロー DSL (YAML) を解析し、実行可能で型安全な
 
 変換の中核は**決定論的**（同じ DSL からは常に同じコード）で、LLM による補助（スタブ実装の自動埋め・lint 自動修正・ノード名の意味的リネーム）は**オプトインの後処理**です（[ADR-0001](docs/adr/0001-deterministic-core-llm-as-opt-in-postprocessing.md)）。
 
+> **はじめての方は [docs/OVERVIEW.md](docs/OVERVIEW.md)（トップダウン全体像・図解）から。**
 > 用語の正準定義は [CONTEXT.md](CONTEXT.md)、設計判断の経緯は [docs/adr/](docs/adr/)、ロードマップは [TODO.md](TODO.md) を参照。
 
 ## 変換パイプライン
