@@ -20,7 +20,7 @@ out_dir="${1:-"${repo_root}/dist"}"
 
 # Read the version from pyproject.toml ([project] version = "x.y.z").
 version="$(
-  awk -F'"' '/^\[project\]/{p=1} p && /^version[[:space:]]*=/{print $2; exit}' \
+  awk -F'"' '/^\[project\]/{p=1} p && /^[[:space:]]*version[[:space:]]*=/{print $2; exit}' \
     "${repo_root}/pyproject.toml"
 )"
 if [[ -z "${version}" ]]; then
@@ -39,7 +39,7 @@ mkdir -p "${stage}"
 mkdir -p "${stage}/src"
 cp -R "${repo_root}/src/dify2langgraph" "${stage}/src/dify2langgraph"
 find "${stage}/src" -type d -name '__pycache__' -prune -exec rm -rf {} +
-find "${stage}/src" -type f -name '*.pyc' -delete
+find "${stage}/src" -type f \( -name '*.pyc' -o -name '.DS_Store' \) -delete
 
 # 2) Packaging metadata so `pip install .` works without a build step.
 cp "${repo_root}/pyproject.toml" "${stage}/pyproject.toml"
