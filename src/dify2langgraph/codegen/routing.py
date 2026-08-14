@@ -1,4 +1,4 @@
-"""Structural routing helpers for Branching Nodes (ADR-0003).
+"""Structural routing helpers for Branching Nodes.
 
 These helpers derive the branch-key -> target mapping from the DSL edge
 ``sourceHandle``. They are type-agnostic: *which* output field drives the route

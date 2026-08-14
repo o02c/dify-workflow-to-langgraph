@@ -1,4 +1,4 @@
-"""Node Handler registry (ADR-0005).
+"""Node Handler registry.
 
 Each Dify Node type maps to one :class:`NodeHandler` that owns the type-specific
 knowledge the generators need:
@@ -71,7 +71,7 @@ class NodeHandler:
 
         The base implementation emits placeholder literals (a Stub). Handlers may
         override to emit real expressions (e.g. the End node forwards upstream
-        values via normalized state accesses, ADR-0004).
+        values via normalized state accesses).
         """
         return {
             name: placeholder_literal(ftype)
@@ -101,7 +101,7 @@ class LlmHandler(NodeHandler):
 
 class KnowledgeRetrievalHandler(NodeHandler):
     node_type = "knowledge-retrieval"
-    emits_stub_body = False  # deterministic: calls the Retriever port (ADR-0006)
+    emits_stub_body = False  # deterministic: calls the Retriever port
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
         return {"result": "list[dict[str, Any]]"}
@@ -115,9 +115,9 @@ class KnowledgeRetrievalHandler(NodeHandler):
         graph: WorkflowGraph,
         node_name_map: dict[str, tuple[str, str]] | None = None,
     ) -> dict[str, str]:
-        # Retrieve through the Retriever port (ADR-0006): the query comes from the
-        # node's query_variable_selector (normalized to a canonical access, ADR-0004)
-        # and the dataset_ids from the Dify config.
+        # Retrieve through the Retriever port: the query comes from the node's
+        # query_variable_selector (normalized to a canonical state access) and the
+        # dataset_ids from the Dify config.
         selector = node.data.get("query_variable_selector") or []
         dataset_ids = node.data.get("dataset_ids") or []
         if len(selector) >= 2 and selector[0] in graph.nodes:
@@ -141,7 +141,7 @@ class KnowledgeRetrievalHandler(NodeHandler):
         Only the DSL-carried fields (top_k, score_threshold); search_method and the
         rest are defaulted by the Retriever adapter (a dataset/deploy concern). The
         adapter also fills the API's other required fields. Reranking passthrough is
-        deferred (it needs a rerank provider/model config).
+        not handled (it needs a rerank provider/model config).
         """
         config = node.data.get("multiple_retrieval_config") or {}
         model: dict[str, object] = {}
@@ -184,7 +184,7 @@ class VariableAggregatorHandler(NodeHandler):
 
 class EndHandler(NodeHandler):
     node_type = "end"
-    emits_stub_body = False  # deterministic: forwards upstream values (ADR-0004)
+    emits_stub_body = False  # deterministic: forwards upstream values
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
         fields: dict[str, str] = {}
@@ -202,8 +202,8 @@ class EndHandler(NodeHandler):
     ) -> dict[str, str]:
         # The End node is deterministic: each declared output's value_selector
         # [node_id, field...] forwards an upstream value via a normalized canonical
-        # state access (ADR-0004). Selectors into non-Node namespaces (sys/env,
-        # deferred) or unknown nodes fall back to a placeholder.
+        # state access. Selectors into non-Node namespaces (sys/env) or unknown
+        # nodes fall back to a placeholder.
         result: dict[str, str] = {}
         for output in node.data.get("outputs", []):
             name = output.get("variable", "")
@@ -238,8 +238,8 @@ class AgentHandler(NodeHandler):
 class _BranchingHandler(NodeHandler):
     """Base for Branching Nodes: default the decision field to a valid branch key.
 
-    So the generated Router (ADR-0003) resolves to a single successor and the
-    graph runs end-to-end before the body is implemented.
+    So the generated Router resolves to a single successor and the graph runs
+    end-to-end before the body is implemented.
     """
 
     is_branching = True

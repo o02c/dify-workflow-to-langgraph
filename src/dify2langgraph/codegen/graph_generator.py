@@ -43,7 +43,7 @@ def generate_graph_file(
         imports = ", ".join(sorted(node_funcs))
         lines.append(f"from .nodes import {imports}")
 
-    # Router functions for Branching Nodes (ADR-0003)
+    # Router functions for Branching Nodes
     branching_nodes = [n for n in graph.nodes.values() if is_branching(n)]
     for node in branching_nodes:
         func_name, _ = get_node_names(node.id, node_name_map)
@@ -89,7 +89,7 @@ def generate_graph_file(
         target_func, _ = get_node_names(edge.target_node_id, node_name_map)
         lines.append(f'    graph.add_edge("{source_func}", "{target_func}")')
 
-    # Conditional edges for Branching Nodes (ADR-0003)
+    # Conditional edges for Branching Nodes
     if branching_nodes:
         lines.append("")
         lines.append("    # Conditional edges (branching)")

@@ -1,8 +1,8 @@
 """Naming utilities: canonical Python names for Dify node IDs.
 
 This is a dependency-free leaf module so both the parser and the code generators
-can share one definition of the canonical state key (ADR-0002:
-``state["node_<id>"]``) without an import cycle.
+can share one definition of the canonical state key (``state["node_<id>"]``)
+without an import cycle.
 """
 
 

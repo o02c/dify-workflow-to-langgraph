@@ -1,8 +1,8 @@
 """Package-file generator for the generated LangGraph workflow.
 
 Emits ``__init__.py`` and ``__main__.py`` so the generated output is a
-self-contained Python package that uses relative imports (no ``sys.path`` hacks,
-ADR-0007). Run it with ``python -m <package>`` from the parent directory.
+self-contained Python package that uses relative imports (no ``sys.path`` hacks).
+Run it with ``python -m <package>`` from the parent directory.
 """
 
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Retriever port for knowledge-retrieval nodes (ADR-0006).
+"""Retriever port for knowledge-retrieval nodes.
 
 Knowledge-retrieval goes through the ``Retriever`` protocol (a port) rather than a
 concrete backend, so the retrieval backend can be swapped without touching node
