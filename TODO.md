@@ -28,7 +28,32 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [x] 生成物を自己完結パッケージ化（相対 import、`__init__`/`__main__`、`sys.path` ハック廃止、ADR-0007）
 - [x] RAG: `Retriever` ポート + `DifyApiRetriever` 既定アダプタ（ADR-0006）
   - `templates/retriever.py`（依存フリー・urllib）を生成物にバンドル、knowledge-retrieval ノードが `get_retriever().retrieve(...)` を呼ぶ実本体を生成。未設定時は `[]` を返し資格情報なしでも走る
-- [ ] テスト拡充 — ハンドラ単位、循環参照・孤立ノード等のエッジケース
+- [~] テスト拡充
+  - [x] 生成コードが ruff の既定設定（line-length 88）で lint クリーンであることを全フィクスチャで固定
+        （`TestGeneratedCodeIsLintClean`。生成物は `pyproject.toml` を持たないため既定設定で lint される）
+  - [x] AWS リージョン / プロファイル解決、SSO エラーメッセージ、`.env` 探索
+  - [ ] ハンドラ単位、循環参照・孤立ノード等のエッジケース
+
+## Packaging / 移植性（ADR-0008）
+
+- [x] 変換ツールを Docker イメージとして配布（`Dockerfile` / `.dockerignore` / `compose.yaml`）
+  - レジストリ公開はせず顧客がローカルビルド。生成物には Dockerfile を出力しない（ADR-0007 の出力契約は不変）
+  - `HOME=/home/app`（botocore の SSO キャッシュ解決）、`PYTHONUTF8=1`、`__pycache__`/`.ruff_cache` を
+    マウント先に撒かない設定を焼き込み。`chmod 0777` で任意 uid の `--user` に対応
+- [x] Windows のコードページ対応 — ファイル I/O の `encoding="utf-8"` 明示、生成 `__main__.py` の
+  stdout エスケープ、ANSI カラーの条件付き有効化
+- [x] Bedrock のリージョン解決（`--aws-region` / `--aws-profile`、暗黙の `us-east-1` を廃止）
+- [x] `.env` 探索を `usecwd=True` に（インストール後に作業ディレクトリの `.env` へ到達できるように）
+- [x] 依存検疫 — `[tool.uv] exclude-newer` で公開 3 日未満の版を採用しない（`make lock` が日付を更新）
+- [x] 未使用依存の削除 — `psycopg2-binary`（ADR-0006 の残骸）、`langchain` メタパッケージ
+- [ ] **Windows ホストでの実機検証** — Windows コンテナは Windows ホストでしか動かないため
+  開発環境（Linux daemon）では不可。文字コード周りは狭いコーデックを固定するテストで代替済みだが、
+  PowerShell の環境変数構文・`--mount` のドライブレター・Docker Desktop for Windows の
+  マウント所有者は実機でしか確認できない
+- [ ] 依存の下限バージョンを実態に合わせる — 例 `langchain-core>=0.3.0` に対し lock は 1.6.3。
+  `uv.lock` 経由なら問題ないが、lock を使わない `pip install .` では古い版が入りうる
+- [ ] 変換ツール用と生成物用の依存の分離（optional extras）— `--auto-fix` が `templates/llm.py` を
+  再利用する関係で現状は混在。分離すると顧客のインストール手順が変わるため保留（docs/tech-stack.md 参照）
 
 ## LLM opt-in post-processing（任意・ADR-0001）
 
