@@ -36,7 +36,12 @@ def run_ruff(file_path: str | Path, fix: bool = False) -> LintResult:
     if fix:
         cmd.append("--fix")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Decode as UTF-8 explicitly: `text=True` would otherwise use the OS
+    # locale codepage (cp932 on Japanese Windows), which mangles or fails on
+    # linter output quoting non-ASCII source lines.
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
 
     errors = []
     if result.stdout:
@@ -66,7 +71,12 @@ def run_ty(file_path: str | Path) -> LintResult:
     file_path = Path(file_path)
     cmd = ["ty", "check", str(file_path)]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Decode as UTF-8 explicitly: `text=True` would otherwise use the OS
+    # locale codepage (cp932 on Japanese Windows), which mangles or fails on
+    # linter output quoting non-ASCII source lines.
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
 
     # ty outputs errors to stderr
     output = result.stdout + result.stderr

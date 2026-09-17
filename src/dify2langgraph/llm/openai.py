@@ -7,7 +7,10 @@ from openai import OpenAI
 
 from .base import LLMConfig, LLMProvider, LLMResponse, Message
 
-load_dotenv(find_dotenv())
+# usecwd=True: search upward from the working directory, not from this file.
+# Once installed (uv sync / pip install) this module lives inside the venv,
+# so the default file-relative search never reaches the user's .env.
+load_dotenv(find_dotenv(usecwd=True))
 
 
 class OpenAIProvider(LLMProvider):
@@ -63,7 +66,10 @@ class OpenAIProvider(LLMProvider):
             for msg in messages
         ]
 
-        response = self.client.chat.completions.create(
+        # openai_messages is a plain list of dicts rather than the SDK's per-role
+        # TypedDict union, and config.extra is open-ended, so neither checker can
+        # match the call against the overloads.
+        response = self.client.chat.completions.create(  # ty: ignore[no-matching-overload]
             model=self.config.model,
             messages=openai_messages,  # type: ignore[arg-type]
             temperature=self.config.temperature,

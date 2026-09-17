@@ -177,8 +177,8 @@ workflow:
           completion_params:
             temperature: 1
           mode: chat
-          name: deepseek-chat
-          provider: deepseek
+          name: gpt-4o-mini
+          provider: openai
         prompt_template:
         - id: 435bb086-612d-4abd-b8da-f47951aa07bf
           role: system
@@ -254,8 +254,8 @@ workflow:
           completion_params:
             temperature: 1
           mode: chat
-          name: deepseek-chat
-          provider: deepseek
+          name: gpt-4o-mini
+          provider: openai
         prompt_template:
         - id: dd43a177-3aad-4995-9dfc-dbc49e01e929
           role: system
@@ -306,8 +306,8 @@ workflow:
           completion_params:
             temperature: 0.7
           mode: chat
-          name: deepseek-chat
-          provider: deepseek
+          name: gpt-4o-mini
+          provider: openai
         prompt_template:
         - id: 425fe1c4-0719-499e-9b33-939444aabc8e
           role: system
@@ -384,8 +384,8 @@ workflow:
           completion_params:
             temperature: 0.7
           mode: chat
-          name: deepseek-chat
-          provider: deepseek
+          name: gpt-4o-mini
+          provider: openai
         prompt_template:
         - id: fafa6cf7-e44b-4025-8ce2-5f01bb48aaf6
           role: system

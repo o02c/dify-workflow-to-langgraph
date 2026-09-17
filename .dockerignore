@@ -1,0 +1,35 @@
+# Keep the build context minimal and never bake secrets into an image layer.
+.env
+.env.*
+!.env.example
+
+.git/
+.github/
+.venv/
+venv/
+dist/
+outputs/
+build/
+*.egg-info/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Not needed to build or run the converter.
+tests/
+docs/
+CONTEXT.md
+TODO.md
+requirement.md
+Makefile
+scripts/
+compose.yaml
+
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -3,6 +3,9 @@
 Emits ``__init__.py`` and ``__main__.py`` so the generated output is a
 self-contained Python package that uses relative imports (no ``sys.path`` hacks).
 Run it with ``python -m <package>`` from the parent directory.
+
+The emitted ``__main__.py`` also makes stdout tolerant of non-ASCII state so a
+run does not die on a legacy Windows console codepage.
 """
 
 from pathlib import Path
@@ -48,8 +51,18 @@ def generate_package_files(
     main_content = "\n".join([
         '"""Entry point: `python -m <package>` builds and runs the workflow."""',
         "",
+        "import io",
+        "import sys",
+        "",
         "from .graph import build_graph",
         "from .state import GraphState",
+        "",
+        "# Workflow state routinely carries non-ASCII text (node titles, prompts,",
+        "# model output). On Windows stdout defaults to the console codepage (cp932",
+        "# on Japanese locales), where printing it raises UnicodeEncodeError; escape",
+        "# what the console cannot represent instead of crashing the run.",
+        "if isinstance(sys.stdout, io.TextIOWrapper):",
+        '    sys.stdout.reconfigure(errors="backslashreplace")',
         "",
         "workflow = build_graph()",
         "# Example: provide input for the start node.",

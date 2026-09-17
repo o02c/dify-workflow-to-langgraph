@@ -9,13 +9,11 @@ description = "Convert Dify workflow DSL to LangGraph Python code"
 requires-python = ">=3.13"
 dependencies = [
     "langgraph>=1.0.5",
-    "langchain>=1.2.0",
     "langchain-core>=0.3.0",
     "langchain-google-genai>=2.1.0",
     "langchain-openai>=0.3.0",
     "langchain-anthropic>=0.3.0",
     "langchain-aws>=1.2.0",
-    "psycopg2-binary>=2.9.11",
     "pyyaml>=6.0.3",
     "boto3>=1.42.0",
     "openai>=2.14.0",
@@ -27,11 +25,20 @@ dependencies = [
 dify2langgraph = "dify2langgraph.cli:main"
 
 [dependency-groups]
-dev = [
-    "pytest>=9.0.2",
-    "pytest-cov>=7.0.0",
+# ruff and ty are runtime dependencies of --lint / --auto-fix, which shell out to
+# them (agents/linter.py), not merely developer tooling -- the Docker image
+# installs this group so those flags work inside the container.
+lint = [
     "ruff>=0.14.11",
     "ty>=0.0.10",
+]
+test = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+]
+dev = [
+    {include-group = "lint"},
+    {include-group = "test"},
 ]
 
 [tool.ruff]
@@ -59,6 +66,16 @@ exclude_lines = [
 
 [tool.uv]
 package = true
+
+# Dependency quarantine: never resolve a version published in the last 3 days, so
+# nothing is adopted before a yank or a compromised release has had time to be
+# noticed. This lives here rather than in a `--exclude-newer` flag so that every
+# uv resolution obeys it -- `uv lock`, `uv add`, a plain `uv sync` -- not just
+# `make lock`. uv takes a fixed timestamp, so `make lock` rolls it forward via
+# scripts/refresh-quarantine.py before re-resolving.
+# The Docker build uses `uv sync --frozen` and resolves nothing, so it simply
+# replays whatever this produced (ADR-0008).
+exclude-newer = "2026-09-14T12:29:33Z"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dify2langgraph"]

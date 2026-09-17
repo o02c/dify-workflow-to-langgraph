@@ -24,7 +24,7 @@ def get_chat_model(
     """Get a configured chat model instance.
 
     Args:
-        provider: LLM provider (google, openai, anthropic, deepseek, bedrock). Defaults to LLM_PROVIDER env var.
+        provider: LLM provider (google, openai, anthropic, bedrock). Defaults to LLM_PROVIDER env var.
         model: Model name. Defaults to LLM_MODEL env var.
         **kwargs: Additional arguments passed to the model constructor.
 
@@ -34,7 +34,6 @@ def get_chat_model(
     Examples:
         >>> llm = get_chat_model()  # Uses defaults from env (gemini-2.5-flash)
         >>> llm = get_chat_model("openai", "gpt-4o-mini")
-        >>> llm = get_chat_model("deepseek", "deepseek-chat")
         >>> llm = get_chat_model("anthropic", "claude-3-5-sonnet-20241022")
         >>> llm = get_chat_model("bedrock", "anthropic.claude-3-5-sonnet-20240620-v1:0")
     """
@@ -49,27 +48,17 @@ def get_chat_model(
     elif provider == "openai":
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(model=model, **kwargs)  # ty: ignore[unknown-argument]
+        return ChatOpenAI(model=model, **kwargs)
 
     elif provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
-        return ChatAnthropic(model=model, **kwargs)  # ty: ignore[unknown-argument]
-
-    elif provider == "deepseek":
-        from langchain_openai import ChatOpenAI
-
-        return ChatOpenAI(
-            model=model,  # ty: ignore[unknown-argument]
-            base_url="https://api.deepseek.com",  # ty: ignore[unknown-argument]
-            api_key=os.getenv("DEEPSEEK_API_KEY"),  # ty: ignore[unknown-argument]
-            **kwargs,
-        )
+        return ChatAnthropic(model=model, **kwargs)
 
     elif provider == "bedrock":
         from langchain_aws import ChatBedrock
 
-        return ChatBedrock(model_id=model, **kwargs)  # ty: ignore[unknown-argument]
+        return ChatBedrock(model_id=model, **kwargs)
 
     else:
         raise ValueError(f"Unknown provider: {provider}")

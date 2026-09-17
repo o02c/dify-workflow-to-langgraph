@@ -257,6 +257,7 @@ flowchart LR
 | [0005](./adr/0005-node-type-handler-registry.md) | ノード種別ごとの知識を Handler レジストリに集約 |
 | [0006](./adr/0006-retrieval-via-dify-api-behind-a-port.md) | RAG は Dify Retrieval API を差し替え可能な Retriever ポート越しに |
 | [0007](./adr/0007-generated-output-is-a-self-contained-package.md) | 生成物は相対 import の自己完結パッケージ |
+| [0008](./adr/0008-converter-ships-as-a-docker-image.md) | 変換ツールは Docker イメージでも配布。生成物には Dockerfile を出さない／Bedrock のリージョン既定を廃止 |
 
 ---
 
@@ -286,6 +287,7 @@ v1 決定論コア（ADR 0002–0007）は実装＋実サーバ検証まで完�
 - [requirement.md](../requirement.md) — 要件サマリ
 - [CONTEXT.md](../CONTEXT.md) — 用語集（ユビキタス言語の正典）
 - [docs/adr/](./adr/) — 各設計判断の理由
+- [docs/tech-stack.md](./tech-stack.md) — 技術スタック（レイヤー別に何をなぜ使うか）
 - [docs/architecture.md](./architecture.md) — 変換器の詳細アーキテクチャ
 - [docs/development.md](./development.md) — 開発手順
 - [TODO.md](../TODO.md) — ロードマップ

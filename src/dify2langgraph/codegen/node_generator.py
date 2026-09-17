@@ -91,11 +91,15 @@ def _generate_node_file(
         "",
         "from langgraph.types import Command",
         "",
-        f"from ..state import GraphState, {class_name}",
     ]
 
-    # Extra imports the handler's body needs (e.g. the Retriever port).
-    lines.extend(handler.body_imports(node))
+    # Local imports, sorted as one block: the handler's extra imports (e.g. the
+    # Retriever port) can sort before `..state`, so they cannot just be appended.
+    local_imports = [
+        "from ..state import " + ", ".join(sorted(["GraphState", class_name])),
+        *handler.body_imports(node),
+    ]
+    lines.extend(sorted(local_imports))
 
     lines += [
         "",

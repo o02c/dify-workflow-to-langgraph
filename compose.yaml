@@ -1,0 +1,62 @@
+# Default docker settings for the converter, so nobody has to retype a long
+# `docker run`. Build the image first: `docker compose build`.
+#
+#   docker compose run --rm convert workflow.yml -o outputs --skip-implement
+#   docker compose run --rm bedrock workflow.yml -o outputs --llm-provider bedrock
+#
+# See USAGE.md section 9 for the details, including when to add `--user` on Linux.
+
+services:
+  # API-key providers (openai / anthropic) and LLM-free conversion.
+  convert:
+    build:
+      context: .
+    image: dify2langgraph:local
+    # The working tree is mounted at /work, so python-dotenv (usecwd=True) picks
+    # up ./.env from inside the container as well. env_file: additionally exports
+    # it to the process; compose parses .env with dotenv semantics, unlike
+    # `docker run --env-file`, which uses a different parser -- see USAGE.md 9.4.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Listed explicitly because `environment:` outranks `env_file:`. A stray
+      # HOME= line in .env would otherwise break SSO cache lookup.
+      - HOME=/home/app
+    volumes:
+      - type: bind
+        source: .
+        target: /work
+    # On Linux, uncomment and export UID/GID so generated files are owned by you:
+    #   UID="$(id -u)" GID="$(id -g)" docker compose run --rm convert ...
+    # Do NOT set this on macOS or Windows -- Docker Desktop already maps
+    # ownership, and overriding the user can break HOME.
+    # user: "${UID}:${GID}"
+
+  # Same, plus AWS SSO credentials for --llm-provider bedrock.
+  # Run `aws sso login --profile <name>` on the host first: the container has no
+  # browser. AWS_DIR overrides the host path when $HOME is not set (Windows
+  # PowerShell): AWS_DIR=C:/Users/you/.aws
+  bedrock:
+    extends:
+      service: convert
+    environment:
+      # Name-only entries forward the host value and are dropped when it is
+      # unset -- no empty AWS_PROFILE= that would then fail as ProfileNotFound.
+      #
+      # Do NOT use `${AWS_PROFILE:?...}` here: compose interpolates every service
+      # in the file on every command, so a required-variable marker on this
+      # service would also break `docker compose run convert`.
+      #
+      # Set AWS_REGION and AWS_DEFAULT_REGION to the same value on the host:
+      # botocore reads only the latter, langchain-aws also reads the former.
+      - AWS_PROFILE
+      - AWS_REGION
+      - AWS_DEFAULT_REGION
+    volumes:
+      # Read-write on purpose: botocore rewrites ~/.aws/sso/cache when the SSO
+      # token is within 15 minutes of expiry, and the write is not guarded by
+      # try/except. A read-only mount fails with OSError in that window only.
+      - type: bind
+        source: ${AWS_DIR:-${HOME}/.aws}
+        target: /home/app/.aws

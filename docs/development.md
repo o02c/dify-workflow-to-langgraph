@@ -7,6 +7,17 @@ This guide covers setting up the development environment and contributing to dif
 - Python 3.13+
 - [uv](https://github.com/astral-sh/uv) package manager
 
+The library and CLI run on Windows, macOS and Linux. The dev *tooling* in this
+guide is not fully portable: `Makefile` and `scripts/build-release.sh` need
+`make` and bash, so on Windows either use WSL/Git Bash for those two or call the
+underlying `uv run ...` commands directly. Everything else works as written once
+environment variables are set with the shell's own syntax (see
+[Debugging](#enable-debug-logging)).
+
+Set `PYTHONUTF8=1` on Windows. Fixtures and generated code carry Japanese and
+Chinese text, and without UTF-8 mode the console codepage (cp932 on Japanese
+locales) garbles test output and CLI logs.
+
 ## Setup
 
 ### Clone and Install
@@ -28,14 +39,17 @@ uv run pytest
 
 ```
 dify-workflow-to-langgraph/
-├── src/dify2langgraph/    # Main package source
+├── src/dify2langgraph/     # Main package source
+│   └── templates/          # Sources copied verbatim into generated packages
 ├── tests/                  # Test files
-│   ├── fixtures/          # Test data files
-│   ├── conftest.py        # Shared fixtures
-│   └── test_*.py          # Test modules
-├── templates/             # Output templates
-├── docs/                  # Documentation
-├── pyproject.toml         # Project configuration
+│   ├── fixtures/           # Test data files
+│   ├── conftest.py         # Shared fixtures
+│   └── test_*.py           # Test modules
+├── docs/                   # Documentation
+├── scripts/                # Release archive + dependency quarantine helpers
+├── Dockerfile              # Converter image (ADR-0008)
+├── compose.yaml            # Default mounts/env for running the image
+├── pyproject.toml          # Project configuration
 └── README.md
 ```
 
@@ -69,6 +83,30 @@ uv run ruff check . --fix
 # Run type checker
 uv run ty check .
 ```
+
+### Updating Dependencies
+
+```bash
+make lock    # roll the quarantine forward, then re-resolve uv.lock
+```
+
+`pyproject.toml` carries `[tool.uv] exclude-newer`, a **dependency quarantine**: no
+version published within the last 3 days is ever resolved, so nothing is adopted
+before a yank or a compromised release has had time to be noticed. uv takes a fixed
+timestamp, so `make lock` rewrites it (`scripts/refresh-quarantine.py`) before
+locking. **Commit the `pyproject.toml` change together with `uv.lock`.**
+
+Because the cutoff lives in `pyproject.toml` rather than in a `--exclude-newer`
+flag, *every* uv command honours it — `uv lock`, `uv add`, `uv sync`, even
+`uv lock --upgrade`. Passing the flag on the command line instead is not durable:
+a later plain `uv sync` silently re-resolves past the cutoff and rewrites the lock.
+
+The layered breakdown of what each dependency is for lives in
+[docs/tech-stack.md](./tech-stack.md).
+
+A side effect worth knowing: if nobody has run `make lock` for a while, `uv add`
+will resolve the newest version *as of the recorded cutoff*, not today's. Run
+`make lock` first if you need something more recent.
 
 ### Running the CLI
 
@@ -256,6 +294,14 @@ uv run ty check .
 
 ```bash
 LOG_LEVEL=DEBUG uv run dify2langgraph workflow.yml
+```
+
+On Windows, set the variable first -- the inline `VAR=value command` form is
+bash-only:
+
+```powershell
+$env:LOG_LEVEL = "DEBUG"
+uv run dify2langgraph workflow.yml
 ```
 
 ### Using pdb

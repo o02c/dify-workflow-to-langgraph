@@ -1,5 +1,6 @@
 """Tests for the translator module."""
 
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -54,7 +55,7 @@ class TestGenerateStateFile:
             state_file = output_dir / "state.py"
             assert state_file.exists()
 
-            content = state_file.read_text()
+            content = state_file.read_text(encoding="utf-8")
             assert "class GraphState(TypedDict, total=False):" in content
             assert "start_node:" in content
             assert "llm_node:" in content
@@ -89,7 +90,7 @@ class TestGenerateNodesDirectory:
             output_dir = Path(tmpdir)
             generate_nodes_directory(graph, output_dir)
 
-            llm_content = (output_dir / "nodes" / "llm_node.py").read_text()
+            llm_content = (output_dir / "nodes" / "llm_node.py").read_text(encoding="utf-8")
             assert "def llm_node(state: GraphState)" in llm_content
             assert "start_node.query" in llm_content
 
@@ -102,7 +103,7 @@ class TestGenerateNodesDirectory:
             output_dir = Path(tmpdir)
             generate_nodes_directory(graph, output_dir)
 
-            init_content = (output_dir / "nodes" / "__init__.py").read_text()
+            init_content = (output_dir / "nodes" / "__init__.py").read_text(encoding="utf-8")
             assert "from .start_node import start_node" in init_content
             assert "from .llm_node import llm_node" in init_content
             assert "from .end_node import end_node" in init_content
@@ -135,7 +136,7 @@ class TestGenerateGraphFile:
             graph_file = output_dir / "graph.py"
             assert graph_file.exists()
 
-            content = graph_file.read_text()
+            content = graph_file.read_text(encoding="utf-8")
             assert "from langgraph.graph import END, START, StateGraph" in content
             assert "def build_graph()" in content
             assert "graph = StateGraph(GraphState)" in content
@@ -151,7 +152,7 @@ class TestGenerateGraphFile:
             output_dir = Path(tmpdir)
             generate_graph_file(graph, output_dir)
 
-            content = (output_dir / "graph.py").read_text()
+            content = (output_dir / "graph.py").read_text(encoding="utf-8")
             # A router function reads the classifier's decision field.
             assert "def route_node_1722397570856(state: GraphState) -> str:" in content
             assert 'return state["node_1722397570856"]["class_id"]' in content
@@ -174,7 +175,7 @@ class TestGenerateGraphFile:
             output_dir = Path(tmpdir)
             generate_graph_file(graph, output_dir)
 
-            content = (output_dir / "graph.py").read_text()
+            content = (output_dir / "graph.py").read_text(encoding="utf-8")
             assert "def route_ifelse_node(state: GraphState) -> str:" in content
             assert 'return state["ifelse_node"]["selected_branch"]' in content
             assert (
@@ -215,7 +216,7 @@ class TestTranslate:
             assert (output_dir / "graph.py").exists()
 
             # Check state has all nodes
-            state_content = (output_dir / "state.py").read_text()
+            state_content = (output_dir / "state.py").read_text(encoding="utf-8")
             assert "1722391426202:" in state_content  # start node
             assert "1722399235845:" in state_content  # end node
 
@@ -226,7 +227,7 @@ class TestTranslate:
             translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
 
             # Try to compile the generated file
-            state_content = (output_dir / "state.py").read_text()
+            state_content = (output_dir / "state.py").read_text(encoding="utf-8")
             compile(state_content, "state.py", "exec")
 
     def test_generated_node_files_are_valid_python(self):
@@ -237,7 +238,7 @@ class TestTranslate:
 
             # Check each node file compiles
             for node_file in (output_dir / "nodes").glob("*.py"):
-                content = node_file.read_text()
+                content = node_file.read_text(encoding="utf-8")
                 compile(content, node_file.name, "exec")
 
     def test_generated_graph_is_valid_python(self):
@@ -246,7 +247,7 @@ class TestTranslate:
             output_dir = Path(tmpdir)
             translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
 
-            graph_content = (output_dir / "graph.py").read_text()
+            graph_content = (output_dir / "graph.py").read_text(encoding="utf-8")
             compile(graph_content, "graph.py", "exec")
 
 
@@ -259,10 +260,10 @@ class TestSelfContainedPackage:
             output_dir = Path(tmpdir)
             translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
 
-            init_content = (output_dir / "__init__.py").read_text()
+            init_content = (output_dir / "__init__.py").read_text(encoding="utf-8")
             assert "from .graph import build_graph" in init_content
 
-            main_content = (output_dir / "__main__.py").read_text()
+            main_content = (output_dir / "__main__.py").read_text(encoding="utf-8")
             assert "from .graph import build_graph" in main_content
             assert "workflow.invoke(initial_state)" in main_content
 
@@ -272,7 +273,7 @@ class TestSelfContainedPackage:
             output_dir = Path(tmpdir)
             translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
 
-            content = (output_dir / "graph.py").read_text()
+            content = (output_dir / "graph.py").read_text(encoding="utf-8")
             assert "from .state import GraphState" in content
             assert "from .nodes import " in content
             # No standalone-run demo (moved to __main__.py).
@@ -284,7 +285,7 @@ class TestSelfContainedPackage:
             output_dir = Path(tmpdir)
             translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
 
-            content = (output_dir / "nodes" / "llm_node.py").read_text()
+            content = (output_dir / "nodes" / "llm_node.py").read_text(encoding="utf-8")
             assert "from ..state import GraphState" in content
             assert "sys.path" not in content
 
@@ -296,6 +297,35 @@ class TestSelfContainedPackage:
 
             assert (output_dir / "retriever.py").exists()
 
-            kr = (output_dir / "nodes" / "node_1722397470145.py").read_text()
+            kr = (output_dir / "nodes" / "node_1722397470145.py").read_text(encoding="utf-8")
             assert "from ..retriever import get_retriever" in kr
             assert "get_retriever().retrieve(" in kr
+
+
+class TestGeneratedCodeIsLintClean:
+    """Generated packages must pass ruff with no project configuration.
+
+    A generated package ships without a pyproject.toml, so whoever lints it --
+    including the CLI's own `--lint` flag -- gets ruff's defaults, notably an
+    88-character line length. Import ordering and line wrapping in the generators
+    are therefore load-bearing, and `--isolated` is what reproduces that.
+    """
+
+    def test_all_fixtures_generate_ruff_clean_packages(self, fixtures_dir: Path) -> None:
+        workflows = sorted(fixtures_dir.glob("*.yml"))
+        assert workflows, "no workflow fixtures found"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            for workflow in workflows:
+                translate(workflow, out / workflow.stem)
+
+            result = subprocess.run(
+                ["ruff", "check", "--isolated", "--output-format", "concise", str(out)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+        assert result.returncode == 0, f"ruff findings:\n{result.stdout}{result.stderr}"

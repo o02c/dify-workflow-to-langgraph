@@ -45,7 +45,20 @@ dify2langgraph workflow.yml -o output/ --skip-implement
 cd output && python -m workflow
 ```
 
+Python を用意せずに変換だけしたい場合は、同梱の `Dockerfile` からビルドして使えます。
+
+```bash
+docker build -t dify2langgraph . && docker run --rm \
+  --mount type=bind,source="$PWD",target=/work \
+  dify2langgraph workflow.yml -o outputs --skip-implement
+```
+
 詳しい CLI オプション・RAG や LLM の設定・生成物の構造は **[USAGE.md](USAGE.md)** を参照してください。
+
+> Windows では [USAGE.md「9. Docker で使う」](USAGE.md#9-docker-で使う) を推奨します。
+> Python 3.13 の用意・コンソールの文字コード設定（`PYTHONUTF8=1`）・シェルごとの環境変数の
+> 書き方がすべて不要になります。直接インストールする場合は
+> [USAGE.md「8. Windows で使う場合」](USAGE.md#8-windows-で使う場合) を参照してください。
 
 ## ライセンス
 
@@ -58,5 +71,6 @@ MIT License
 - [docs/OVERVIEW.md](docs/OVERVIEW.md) — トップダウンの全体像（図解つき）
 - [CONTEXT.md](CONTEXT.md) — 用語集（正準）
 - [docs/adr/](docs/adr/) — 設計判断の記録（ADR）
+- [docs/tech-stack.md](docs/tech-stack.md) — 技術スタック（レイヤー別に何をなぜ使うか）
 - [docs/architecture.md](docs/architecture.md) / [docs/development.md](docs/development.md) / [docs/STYLE_GUIDE.md](docs/STYLE_GUIDE.md)
 - [TODO.md](TODO.md) — ロードマップ

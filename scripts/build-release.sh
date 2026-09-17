@@ -2,7 +2,8 @@
 #
 # Build a release archive for external distribution.
 #
-# The archive ships the .py sources as-is (no wheel/sdist build) plus the
+# The archive ships the .py sources as-is (no wheel/sdist build), the Docker
+# packaging (Dockerfile / .dockerignore / compose.yaml / uv.lock), and the
 # user-facing docs only. Developer material (CONTEXT.md, docs/adr, TODO.md,
 # requirement.md, docs/development.md, docs/STYLE_GUIDE.md, tests) is excluded.
 #
@@ -44,12 +45,19 @@ find "${stage}/src" -type f \( -name '*.pyc' -o -name '.DS_Store' \) -delete
 # 2) Packaging metadata so `pip install .` works without a build step.
 cp "${repo_root}/pyproject.toml" "${stage}/pyproject.toml"
 
-# 3) User-facing docs only. Drop README's trailing "開発者向け" (developer) section,
+# 3) Docker packaging. uv.lock is required: the image builds with `uv sync
+#    --frozen`, so without the lock the archive cannot be built at all.
+cp "${repo_root}/Dockerfile" "${stage}/Dockerfile"
+cp "${repo_root}/.dockerignore" "${stage}/.dockerignore"
+cp "${repo_root}/compose.yaml" "${stage}/compose.yaml"
+cp "${repo_root}/uv.lock" "${stage}/uv.lock"
+
+# 4) User-facing docs only. Drop README's trailing "開発者向け" (developer) section,
 #    whose links point at excluded developer docs.
 sed '/^## 開発者向け$/,$d' "${repo_root}/README.md" > "${stage}/README.md"
 cp "${repo_root}/USAGE.md" "${stage}/USAGE.md"
 
-# 4) Archive.
+# 5) Archive.
 mkdir -p "${out_dir}"
 tar -C "${out_dir}" -czf "${out_dir}/${name}.tar.gz" "${name}"
 
