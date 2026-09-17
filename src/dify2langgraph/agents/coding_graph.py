@@ -60,7 +60,7 @@ def _content_hash(content: str) -> str:
 def lint_node(state: CodingState) -> dict:
     """Run linters on the file."""
     file_path = state["file_path"]
-    content = Path(file_path).read_text()
+    content = Path(file_path).read_text(encoding="utf-8")
 
     results = []
     results.append(run_ruff(file_path))
@@ -111,7 +111,7 @@ def should_fix(state: CodingState) -> str:
 def prepare_fix_prompt(state: CodingState) -> dict:
     """Prepare the prompt for the LLM to fix errors."""
     file_path = state["file_path"]
-    content = Path(file_path).read_text()
+    content = Path(file_path).read_text(encoding="utf-8")
 
     # Format lint errors
     error_lines = []
@@ -177,7 +177,7 @@ def fix_node(state: CodingState, llm) -> dict:
     fixed_code = fixed_code.strip()
 
     # Write fixed code
-    Path(state["file_path"]).write_text(fixed_code)
+    Path(state["file_path"]).write_text(fixed_code, encoding="utf-8")
 
     return {
         "file_content": fixed_code,

@@ -6,6 +6,7 @@ an isolated subprocess -- exactly what a user does with `python -m <package>`.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +33,36 @@ print(json.dumps(result))
 """
 
 
+def _run_python(
+    args: list[str], cwd: Path, io_encoding: str = "utf-8"
+) -> subprocess.CompletedProcess:
+    """Run a child Python with a pinned stdio codec on both ends.
+
+    Generated packages carry non-ASCII text (node titles, prompts, model output).
+    Left to the default, the child encodes stdout with the OS console codepage --
+    cp932 on Japanese Windows -- and the parent decodes with that same codepage,
+    so the round trip differs per host. Pin both sides instead.
+
+    Args:
+        args: Arguments after the interpreter (e.g. ``["-m", "wf"]``).
+        cwd: Working directory for the child process.
+        io_encoding: Codec forced on the child's stdio and used to decode it.
+            Pass a narrow codec to reproduce a legacy Windows console anywhere.
+
+    Returns:
+        The completed process, with stdout/stderr decoded as ``io_encoding``.
+    """
+    return subprocess.run(
+        [sys.executable, *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding=io_encoding,
+        errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": io_encoding},
+    )
+
+
 def _generate_and_run(output_dir: Path, fixture: str, initial: dict) -> dict:
     """Generate a fixture into a package, run it as `python -m`-style, return state.
 
@@ -50,12 +81,7 @@ def _generate_and_run(output_dir: Path, fixture: str, initial: dict) -> dict:
     translate(FIXTURES_DIR / fixture, output_dir / _PKG)
 
     snippet = _RUN_SNIPPET.format(initial=repr(initial))
-    proc = subprocess.run(
-        [sys.executable, "-c", snippet],
-        cwd=output_dir,
-        capture_output=True,
-        text=True,
-    )
+    proc = _run_python(["-c", snippet], output_dir)
     assert proc.returncode == 0, f"generated graph failed to run:\n{proc.stderr}"
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
@@ -73,14 +99,33 @@ class TestGeneratedGraphRuns:
     def test_package_runs_as_module(self, tmp_path):
         """`python -m <pkg>` runs the __main__ entry point end-to-end (ADR-0007)."""
         translate(FIXTURES_DIR / "simple_workflow.yml", tmp_path / _PKG)
-        proc = subprocess.run(
-            [sys.executable, "-m", _PKG],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-        )
+        proc = _run_python(["-m", _PKG], tmp_path)
         assert proc.returncode == 0, proc.stderr
         assert "start_node" in proc.stdout  # __main__ prints the final state
+
+    def test_package_prints_non_ascii_state_on_legacy_codepage(self, tmp_path):
+        """`python -m <pkg>` survives a console codec that cannot encode the state.
+
+        Once node bodies are implemented, real workflows put Japanese/Chinese text
+        in the state. On Windows stdout defaults to the console codepage, and a
+        state it cannot encode kills the run with UnicodeEncodeError. The generated
+        ``__main__.py`` escapes those characters instead; force a narrow codec on
+        the child to reproduce that console on any host.
+        """
+        translate(FIXTURES_DIR / "simple_workflow.yml", tmp_path / _PKG)
+
+        # Stand in for an implemented node: return text the codec cannot encode.
+        node = tmp_path / _PKG / "nodes" / "llm_node.py"
+        src = node.read_text(encoding="utf-8")
+        assert '"text": "placeholder"' in src
+        node.write_text(
+            src.replace('"text": "placeholder"', '"text": "\u7ffb\u8a33\u7d50\u679c"'),
+            encoding="utf-8",
+        )
+
+        proc = _run_python(["-m", _PKG], tmp_path, io_encoding="cp1252")
+        assert proc.returncode == 0, proc.stderr
+        assert "\\u7ffb" in proc.stdout  # escaped, not crashed
 
     def test_end_node_forwards_upstream_value(self, tmp_path):
         """The End node deterministically forwards an upstream field (ADR-0004).

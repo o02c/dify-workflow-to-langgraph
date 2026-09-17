@@ -10,6 +10,7 @@ Environment Variables:
     LOG_FORMAT: Output format ("json" or "console"). Default: console
 """
 
+import io
 import json
 import logging
 import logging.config
@@ -48,6 +49,28 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_data, ensure_ascii=False)
 
 
+def supports_ansi_colors() -> bool:
+    """Whether stderr renders ANSI escape codes.
+
+    Windows consoles only interpret them when virtual-terminal processing is
+    enabled; where it is not, colored output degrades into literal ``[32m``
+    noise in front of every log line. Trust the marker variables set by the
+    terminals that do handle it.
+
+    Returns:
+        True if color codes are safe to emit.
+    """
+    if not sys.stderr.isatty():
+        return False
+    if os.name != "nt":
+        return True
+    return bool(
+        os.environ.get("WT_SESSION")
+        or os.environ.get("ANSICON")
+        or os.environ.get("TERM")
+    )
+
+
 class ConsoleFormatter(logging.Formatter):
     """Console formatter with optional color support for development."""
 
@@ -67,7 +90,7 @@ class ConsoleFormatter(logging.Formatter):
             use_colors: Whether to use ANSI color codes.
         """
         super().__init__()
-        self.use_colors = use_colors and sys.stderr.isatty()
+        self.use_colors = use_colors and supports_ansi_colors()
 
     def format(self, record: logging.LogRecord) -> str:
         """Format log record for console output.
@@ -120,6 +143,16 @@ def configure_logging() -> None:
     """
     log_level = get_log_level()
     log_format = get_log_format()
+
+    # Log records carry non-ASCII text (node titles, prompts, file paths such as
+    # C:\\Users\\<name>\\workflow.yml). On Windows stderr uses the console codepage,
+    # and a record it cannot encode makes logging drop the line and emit an
+    # internal error instead -- escape those characters and keep the line.
+    if isinstance(sys.stderr, io.TextIOWrapper):
+        try:
+            sys.stderr.reconfigure(errors="backslashreplace")
+        except (OSError, ValueError):  # pragma: no cover - stream not reconfigurable
+            pass
 
     # Create handler
     handler = logging.StreamHandler(sys.stderr)

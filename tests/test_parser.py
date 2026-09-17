@@ -240,7 +240,7 @@ class TestDifyDSLParser:
     def test_extract_all_node_ids(self, parser):
         """Test extracting all node IDs from DSL."""
         filepath = FIXTURES_DIR / "simple_workflow.yml"
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             import yaml
             dsl_data = yaml.safe_load(f)
 
