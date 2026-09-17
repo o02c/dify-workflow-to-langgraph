@@ -108,6 +108,11 @@ dependencies of a CLI feature, not developer tooling. `psycopg2-binary`, left ov
 from the direct-SQL retriever removed in
 [ADR-0006](./0006-retrieval-via-dify-api-behind-a-port.md), is dropped.
 
+The image runs as `USER 1000:1000`, so output is never root-owned by default; on a
+Linux host whose user is not uid 1000, `--user "$(id -u):$(id -g)"` is still needed
+for the files to belong to the caller. Docker Desktop and Rancher Desktop translate
+ownership on bind mounts, so the flag is unnecessary — and can break `HOME` — there.
+
 ## Status
 
 Implemented and verified on macOS / Rancher Desktop. The image builds and converts

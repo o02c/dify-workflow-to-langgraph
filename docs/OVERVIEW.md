@@ -272,12 +272,14 @@ v1 決定論コア（ADR 0002–0007）は実装＋実サーバ検証まで完�
 - 変数参照の正準化 + End ノードの決定論的本体
 - 自己完結パッケージ化（相対 import・`python -m`）
 - RAG Retriever ポート（Dify API、実 1.16.1 で検証）
+- 変換ツールの Docker 配布・Windows のコードページ対応（[ADR-0008](./adr/0008-converter-ships-as-a-docker-image.md)）
 
 **未対応 / 保留**（[TODO.md](../TODO.md) 参照）
 - **iteration（ループ）** — ループ全体が 1 ノードで内部にサブグラフを持つ表現。Handler 形状が未確定（唯一の大きなアーキ課題）
 - ほとんどのノード本体は Stub（llm / code / tool / … の実装）
 - `{{#context#}}` 解決、`sys.*` / `env.*` の実装
 - Retriever の reranking / single モード転送
+- Windows ホストでの実機検証（Windows コンテナは Windows ホスト必須のため開発環境では不可）
 - LLM オプトイン後処理（スタブ穴埋め・lint 自動修正・並列化）の整理
 
 ---

@@ -348,7 +348,7 @@ docker run --rm `
 
 | ホスト | `--user` |
 |--------|----------|
-| **Linux** | `--user "$(id -u):$(id -g)"` を**付ける**。付けないと生成物が root 所有になり、ホストから編集・削除できません |
+| **Linux** | `--user "$(id -u):$(id -g)"` を**付ける**。イメージの既定は uid 1000 なので、付けないと生成物が **uid 1000 の所有**になります。あなたの uid が 1000 でなければ書き換えられません （`id -u` で確認できます。ディストリビューションによっては最初のユーザーが 1000 なので、その場合はたまたま一致します） |
 | **macOS / Windows**（Docker Desktop / Rancher Desktop） | **付けない**。マウント層が所有者を変換するので不要で、付けると `HOME` の解決が壊れる場合があります |
 
 ```bash
@@ -508,7 +508,7 @@ env-no-export` の出力が**機械生成・クォート無し・1 行 1 変数*
 | `ProfileNotFound` | `~/.aws` をマウントせずに `AWS_PROFILE` / `--aws-profile` を指定している。外す |
 | `NoRegionError` | リージョンがどこにも無い。`--aws-region`、または `AWS_REGION` と `AWS_DEFAULT_REGION` の両方を設定 |
 | `AccessDeniedException`（Bedrock） | リージョンかモデル ID が想定と違う。`--aws-region` で明示する |
-| 生成物が root 所有になる（Linux） | `--user "$(id -u):$(id -g)"` を付ける（[9.3](#93-ファイルの所有者linux-のみ注意)） |
+| 生成物が別ユーザー所有になる（Linux） | イメージ既定の uid 1000 で書かれている。`--user "$(id -u):$(id -g)"` を付ける（[9.3](#93-ファイルの所有者linux-のみ注意)） |
 | `invalid reference format` 等のマウントエラー（Windows） | `-v` を使っている。`--mount type=bind,source=...` に置き換える |
 | API キーが読まれない | `--env-file` で手書き `.env` を渡している。`.env` を `/work` にマウントする方式に変える（[9.4](#94-api-キーの渡し方)） |
 
@@ -524,4 +524,10 @@ env-no-export` の出力が**機械生成・クォート無し・1 行 1 変数*
 > `~/.aws` を rw マウントした Bedrock 経路（`--name-nodes` を実資格情報で 1 回通し、
 > SSO トークン期限切れ時のエラーメッセージも実地で確認）。生成物はホストで
 > `uv run dify2langgraph` した場合と**バイト単位で一致**します（ADR-0001 の決定論）。
-> Windows / Linux ホストでの実機確認は未実施です。
+>
+> ファイル所有者（9.3）は named volume を使って Linux の素のセマンティクスで確認済みです
+> （`--user` 無し → uid 1000、`--user 0:0` → root、`--user 4242:4242` → 4242）。
+>
+> **未検証**: Windows ホストでの実機動作。Windows コンテナは Windows ホストでしか
+> 動かないため、この開発環境（Linux daemon）では検証できません。ただし文字コード周りの
+> 挙動は、子プロセスの stdio に狭いコーデックを固定するテストで OS に依らず再現しています。
