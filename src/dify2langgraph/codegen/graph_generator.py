@@ -13,6 +13,27 @@ from dify2langgraph.parser.dsl_parser import WorkflowGraph
 
 logger = get_logger(__name__)
 
+# Generated packages ship without a pyproject.toml, so anyone who lints them --
+# including our own `--lint` flag -- gets ruff's default line length. Match it so
+# a freshly generated package is isort-clean out of the box.
+RUFF_DEFAULT_LINE_LENGTH = 88
+
+
+def format_from_import(module: str, names: list[str]) -> list[str]:
+    """Render a `from <module> import ...` statement, wrapping it when too long.
+
+    Args:
+        module: Module to import from, e.g. ``.nodes``.
+        names: Names to import, already in the desired order.
+
+    Returns:
+        Source lines: one line, or a parenthesised block matching ruff's isort.
+    """
+    single = f"from {module} import {', '.join(names)}"
+    if len(single) <= RUFF_DEFAULT_LINE_LENGTH:
+        return [single]
+    return [f"from {module} import (", *(f"    {name}," for name in names), ")"]
+
 
 def generate_graph_file(
     graph: WorkflowGraph,
@@ -34,14 +55,13 @@ def generate_graph_file(
         "",
         "from langgraph.graph import END, START, StateGraph",
         "",
-        "from .state import GraphState",
     ]
 
-    # Import node functions
+    # Local imports, isort order: `.nodes` sorts before `.state`.
     node_funcs = [get_node_names(n.id, node_name_map)[0] for n in graph.nodes.values()]
     if node_funcs:
-        imports = ", ".join(sorted(node_funcs))
-        lines.append(f"from .nodes import {imports}")
+        lines.extend(format_from_import(".nodes", sorted(node_funcs)))
+    lines.append("from .state import GraphState")
 
     # Router functions for Branching Nodes
     branching_nodes = [n for n in graph.nodes.values() if is_branching(n)]

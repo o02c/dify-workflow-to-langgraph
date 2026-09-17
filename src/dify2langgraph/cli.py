@@ -4,6 +4,7 @@ This module provides the command-line interface for the converter.
 """
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -77,6 +78,68 @@ def copy_templates(output_dir: Path) -> None:
         logger.info("Copied: %s", dest)
 
 
+def _provider_kwargs(args: argparse.Namespace) -> dict[str, str]:
+    """Build provider-specific keyword arguments from CLI flags.
+
+    Args:
+        args: Parsed CLI arguments.
+
+    Returns:
+        Keyword arguments for ``create_provider`` (empty for non-AWS providers).
+    """
+    if args.llm_provider != "bedrock":
+        return {}
+
+    kwargs: dict[str, str] = {}
+    if args.aws_region:
+        kwargs["region"] = args.aws_region
+    if args.aws_profile:
+        kwargs["profile"] = args.aws_profile
+    return kwargs
+
+
+def _credential_hint(exc: Exception, args: argparse.Namespace) -> str | None:
+    """Turn an opaque AWS credential error into an actionable instruction.
+
+    botocore's message for an expired modern (``sso_session``) profile is
+    "Token has expired and refresh failed" -- it never mentions ``aws sso login``.
+    Only the legacy profile format produces that advice.
+
+    Args:
+        exc: The exception raised while running the conversion.
+        args: Parsed CLI arguments (for the profile name to suggest).
+
+    Returns:
+        A hint to log alongside the error, or None if the error is unrelated.
+    """
+    try:
+        from botocore.exceptions import (
+            NoRegionError,
+            SSOTokenLoadError,
+            TokenRetrievalError,
+            UnauthorizedSSOTokenError,
+        )
+    except ImportError:
+        return None
+
+    if isinstance(exc, SSOTokenLoadError | TokenRetrievalError | UnauthorizedSSOTokenError):
+        profile = args.aws_profile or os.getenv("AWS_PROFILE")
+        command = f"aws sso login --profile {profile}" if profile else "aws sso login"
+        return (
+            f"AWS SSO credentials are missing or expired. Run `{command}` and retry. "
+            "In Docker, run it on the host (the container has no browser) and mount "
+            "~/.aws read-write so the refreshed token can be written back."
+        )
+
+    if isinstance(exc, NoRegionError):
+        return (
+            "No AWS region was resolved. Pass --aws-region, or set both AWS_REGION "
+            "and AWS_DEFAULT_REGION, or give the AWS profile a region."
+        )
+
+    return None
+
+
 def main() -> int:
     """Main entry point for CLI."""
     arg_parser = argparse.ArgumentParser(
@@ -110,6 +173,24 @@ def main() -> int:
         type=str,
         default="gpt-4o-mini",
         help="LLM model for node naming (default: gpt-4o-mini)",
+    )
+    arg_parser.add_argument(
+        "--aws-region",
+        type=str,
+        default=None,
+        help=(
+            "AWS region for --llm-provider bedrock "
+            "(default: AWS_REGION / AWS_DEFAULT_REGION, then the profile's region)"
+        ),
+    )
+    arg_parser.add_argument(
+        "--aws-profile",
+        type=str,
+        default=None,
+        help=(
+            "AWS profile for --llm-provider bedrock. Leave unset when passing "
+            "static credentials via environment variables."
+        ),
     )
     arg_parser.add_argument(
         "--skip-implement",
@@ -160,6 +241,7 @@ def main() -> int:
             engine = CodeGenerationEngine.from_config(
                 args.llm_provider,
                 args.llm_model,
+                **_provider_kwargs(args),
             )
 
         # Generate node names if requested
@@ -217,6 +299,9 @@ def main() -> int:
         return 0
     except Exception as e:
         logger.error("Error: %s", e)
+        hint = _credential_hint(e, args)
+        if hint:
+            logger.error("%s", hint)
         return 1
 
 

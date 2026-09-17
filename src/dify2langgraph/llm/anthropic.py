@@ -7,7 +7,10 @@ from dotenv import find_dotenv, load_dotenv
 
 from .base import LLMConfig, LLMProvider, LLMResponse, Message
 
-load_dotenv(find_dotenv())
+# usecwd=True: search upward from the working directory, not from this file.
+# Once installed (uv sync / pip install) this module lives inside the venv,
+# so the default file-relative search never reaches the user's .env.
+load_dotenv(find_dotenv(usecwd=True))
 
 
 class AnthropicProvider(LLMProvider):
@@ -78,7 +81,10 @@ class AnthropicProvider(LLMProvider):
         if system_content:
             kwargs["system"] = system_content
 
-        response = self.client.messages.create(**kwargs)
+        # The request is assembled dynamically (config.extra is open-ended), so a
+        # type checker cannot match it against the SDK's overloads; the shapes are
+        # enforced by the API at call time instead.
+        response = self.client.messages.create(**kwargs)  # ty: ignore[no-matching-overload]
 
         # Extract content from response
         content = ""

@@ -1,5 +1,6 @@
 """Amazon Bedrock LLM provider."""
 
+import os
 from typing import Any
 
 import boto3
@@ -21,20 +22,32 @@ class BedrockProvider(LLMProvider):
     def __init__(
         self,
         config: LLMConfig,
-        region: str = "us-east-1",
+        region: str | None = None,
         profile: str | None = None,
     ) -> None:
         """Initialize Bedrock provider.
 
         Args:
             config: LLM configuration.
-            region: AWS region for Bedrock.
+            region: AWS region for Bedrock. Falls back to AWS_REGION /
+                AWS_DEFAULT_REGION, then to the AWS profile's own region.
             profile: Optional AWS profile name.
         """
         super().__init__(config)
-        self.region = region
 
-        session_kwargs: dict[str, Any] = {"region_name": region}
+        # botocore only reads AWS_DEFAULT_REGION (configprovider.py); langchain-aws
+        # also honours AWS_REGION. Accept both here so one converter invocation
+        # behaves the same as the rest of the toolchain. When nothing is set we
+        # pass no region_name at all and let boto3 resolve the profile's region --
+        # hitting a hardcoded us-east-1 instead is a silent AccessDeniedException.
+        self.region = region or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+
+        session_kwargs: dict[str, Any] = {}
+        if self.region:
+            session_kwargs["region_name"] = self.region
+        # Only pass profile_name when explicitly asked: naming a profile makes
+        # botocore drop EnvProvider from the credential chain, so static
+        # AWS_ACCESS_KEY_ID/SECRET env credentials would be ignored.
         if profile:
             session_kwargs["profile_name"] = profile
 

@@ -93,7 +93,9 @@ def with_tracing(name: str | None = None) -> Callable[[F], F]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             # LangSmith automatically traces langchain/langgraph operations
             # For custom functions, we can add metadata
-            trace_name = name or func.__name__
+            # Not every callable has __name__ (partials, callable instances),
+            # and F is only bound to Callable -- so read it defensively.
+            trace_name = name or getattr(func, "__name__", repr(func))
             logger.debug("Tracing: %s", trace_name)
             return func(*args, **kwargs)
 

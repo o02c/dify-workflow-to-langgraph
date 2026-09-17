@@ -144,6 +144,9 @@ WorkflowGraph + LLM
 └── generate_all_nodes() → Implemented node code
 ```
 
+> Which third-party packages each layer needs, and why, is in
+> [docs/tech-stack.md](./tech-stack.md).
+
 ## Configuration
 
 ### Environment Variables
@@ -169,7 +172,31 @@ LLM providers are configured via environment variables:
 
 - OpenAI: `OPENAI_API_KEY`
 - Anthropic: `ANTHROPIC_API_KEY`
-- Bedrock: AWS credentials via standard AWS configuration
+- Bedrock: AWS credentials via the standard AWS chain, plus a region
+
+Both dotenv-loading providers call `find_dotenv(usecwd=True)`: the default search
+starts at the provider module's own directory, which is inside the venv once the
+tool is installed, and so never reaches the user's `.env`.
+
+#### AWS region and profile ([ADR-0008](./adr/0008-converter-ships-as-a-docker-image.md))
+
+| Variable / flag | Read by | Notes |
+|-----------------|---------|-------|
+| `--aws-region` | `BedrockProvider` | Highest precedence |
+| `AWS_REGION` | `BedrockProvider`, `langchain-aws` | **Not** read by botocore |
+| `AWS_DEFAULT_REGION` | `BedrockProvider`, botocore | The only region variable botocore itself reads |
+| `--aws-profile` / `AWS_PROFILE` | `BedrockProvider` | Omit when using static env credentials |
+
+`BedrockProvider` resolves `--aws-region` → `AWS_REGION` → `AWS_DEFAULT_REGION`, and
+passes **no** `region_name` when none is set, so boto3 falls back to the profile's
+region. There is no hardcoded default; an unresolved region raises `NoRegionError`.
+`profile_name` is passed only when explicitly requested, because naming a profile
+makes botocore drop `EnvProvider` from the credential chain.
+
+`cli.py` translates `TokenRetrievalError` / `SSOTokenLoadError` /
+`UnauthorizedSSOTokenError` / `NoRegionError` into an actionable message —
+botocore's own text for an expired `sso_session` profile never mentions
+`aws sso login`.
 
 ## Extension Points
 
