@@ -46,12 +46,42 @@ dify-workflow-to-langgraph/
 │   ├── conftest.py         # Shared fixtures
 │   └── test_*.py           # Test modules
 ├── docs/                   # Documentation
-├── scripts/                # Release archive + dependency quarantine helpers
+├── scripts/                # Release archive, dependency quarantine, cross-platform checks
 ├── Dockerfile              # Converter image (ADR-0008)
 ├── compose.yaml            # Default mounts/env for running the image
 ├── pyproject.toml          # Project configuration
 └── README.md
 ```
+
+## Cross-platform verification
+
+The converter is deterministic (ADR-0001), which means the same DSL must produce
+byte-identical output whether it ran natively on macOS, natively on Windows, or in
+the container. Two helpers make that checkable rather than assumed.
+
+```bash
+# Reference digest of a generated package. Same value on any platform.
+make verify-digest
+```
+
+```powershell
+# On a Windows host: run the checks that cannot be made from macOS/Linux --
+# console code page, PowerShell env-var syntax, path separators, --mount with a
+# drive letter -- and compare output against the digest above.
+.\scripts\verify-windows.ps1 -ExpectedDigest <digest from make verify-digest>
+```
+
+`verify-windows.ps1` is written for Windows PowerShell 5.1 (still the default shell
+on most Windows hosts), installs nothing, and skips the Docker group automatically
+when no daemon is reachable. Note that Docker Desktop for Windows needs WSL2, so
+inside a Parallels VM it requires nested virtualization to be enabled; the native
+checks run fine without it.
+
+Generated files are written with `newline="\n"` so they are LF on every platform.
+Left to Python's default, a native Windows run would emit CRLF while the container
+emitted LF, and the same DSL would produce byte-different output depending on how
+the converter happened to be run. `TestGeneratedOutputIsByteStableAcrossPlatforms`
+guards this.
 
 ## Development Workflow
 

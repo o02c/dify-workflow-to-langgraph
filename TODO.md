@@ -46,10 +46,16 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [x] `.env` 探索を `usecwd=True` に（インストール後に作業ディレクトリの `.env` へ到達できるように）
 - [x] 依存検疫 — `[tool.uv] exclude-newer` で公開 3 日未満の版を採用しない（`make lock` が日付を更新）
 - [x] 未使用依存の削除 — `psycopg2-binary`（ADR-0006 の残骸）、`langchain` メタパッケージ
-- [ ] **Windows ホストでの実機検証** — Windows コンテナは Windows ホストでしか動かないため
-  開発環境（Linux daemon）では不可。文字コード周りは狭いコーデックを固定するテストで代替済みだが、
-  PowerShell の環境変数構文・`--mount` のドライブレター・Docker Desktop for Windows の
-  マウント所有者は実機でしか確認できない
+- [~] **Windows ホストでの実機検証** — `scripts/verify-windows.ps1` を用意（PowerShell 5.1 互換）。
+  macOS からは検証できない主張だけを対象にしている: コンソールのコードページ、PowerShell の
+  環境変数構文、パス区切り、`--mount` のドライブレター、Docker Desktop for Windows のマウント所有者。
+  出力のバイト一致は `make verify-digest`（macOS/Linux）と `-ExpectedDigest`（Windows）で突き合わせる
+  - [x] macOS 側の基準値と Linux コンテナ側の検証は完了（両者一致）
+  - [ ] Windows 実機でのネイティブ CLI 検証（B/C/D 群）。Docker 不要で実施できる
+  - [ ] Windows 実機での Docker 検証（E 群）— **現状の手元環境では不可**。Docker Desktop for
+    Windows は WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は
+    Parallels Desktop の Pro / Business 版専用で、Standard 版では有効化できない。
+    実施するには Parallels のエディション変更か、別の Windows 実機が要る
 - [ ] 依存の下限バージョンを実態に合わせる — 例 `langchain-core>=0.3.0` に対し lock は 1.6.3。
   `uv.lock` 経由なら問題ないが、lock を使わない `pip install .` では古い版が入りうる
 - [ ] 変換ツール用と生成物用の依存の分離（optional extras）— `--auto-fix` が `templates/llm.py` を
