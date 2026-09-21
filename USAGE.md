@@ -270,6 +270,8 @@ PowerShell / コマンドプロンプトでは使えません。以下に読み�
 ### 8.3 補足
 
 - パス区切りは `\` / `/` どちらでも動作します（内部で `pathlib` を使用）。
+- 生成物の改行コードは OS に関わらず常に **LF** です。Windows でネイティブ実行しても
+  Docker で実行しても同じバイト列になるので、生成コードを Git 管理しても差分が出ません。
 - `cd output && python -m workflow` の `&&` は PowerShell 7 以降でのみ有効です。
   Windows PowerShell 5.1 では `cd output; python -m workflow` と書いてください。
 - リポジトリ同梱の `Makefile` と `scripts/build-release.sh` は開発者向けで、

@@ -177,7 +177,7 @@ def fix_node(state: CodingState, llm) -> dict:
     fixed_code = fixed_code.strip()
 
     # Write fixed code
-    Path(state["file_path"]).write_text(fixed_code, encoding="utf-8")
+    Path(state["file_path"]).write_text(fixed_code, encoding="utf-8", newline="\n")
 
     return {
         "file_content": fixed_code,

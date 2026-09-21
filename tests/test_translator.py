@@ -302,6 +302,32 @@ class TestSelfContainedPackage:
             assert "get_retriever().retrieve(" in kr
 
 
+class TestGeneratedOutputIsByteStableAcrossPlatforms:
+    """The same DSL must produce the same bytes wherever the converter runs."""
+
+    def test_generated_files_use_lf_line_endings(self):
+        """No CRLF in any generated file, on any host OS (ADR-0001).
+
+        Python's text mode rewrites "\n" to ``os.linesep`` unless ``newline`` is
+        pinned, so a native Windows run would emit CRLF while the container
+        (Linux) emits LF. That would make the output byte-different depending on
+        how the user happened to run the converter, and would churn the whole
+        file in git when they switch between the two documented paths.
+
+        This assertion is trivially true on macOS/Linux and is the one that
+        actually bites on Windows -- which is the point of keeping it.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "guardduty_handler.yml", output_dir)
+
+            generated = sorted(output_dir.rglob("*.py"))
+            assert generated, "fixture produced no files"
+
+            crlf = [p.name for p in generated if b"\r\n" in p.read_bytes()]
+            assert not crlf, f"CRLF line endings in: {crlf}"
+
+
 class TestGeneratedCodeIsLintClean:
     """Generated packages must pass ruff with no project configuration.
 

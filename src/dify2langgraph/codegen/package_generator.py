@@ -40,7 +40,7 @@ def generate_package_files(
         '__all__ = ["build_graph"]',
         "",
     ])
-    (output_dir / "__init__.py").write_text(init_content, encoding="utf-8")
+    (output_dir / "__init__.py").write_text(init_content, encoding="utf-8", newline="\n")
 
     # Entry point: build the graph and invoke it with an example initial state.
     if graph.start_node_id:
@@ -71,6 +71,6 @@ def generate_package_files(
         "print(result)",
         "",
     ])
-    (output_dir / "__main__.py").write_text(main_content, encoding="utf-8")
+    (output_dir / "__main__.py").write_text(main_content, encoding="utf-8", newline="\n")
 
     logger.info("Generated: %s/__init__.py, __main__.py", output_dir)

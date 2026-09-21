@@ -165,7 +165,7 @@ def _generate_node_file(
 
     content = "\n".join(lines)
     output_path = nodes_dir / filename
-    output_path.write_text(content, encoding="utf-8")
+    output_path.write_text(content, encoding="utf-8", newline="\n")
 
 
 def _generate_nodes_init(
@@ -203,4 +203,4 @@ def _generate_nodes_init(
 
     content = "\n".join(lines)
     output_path = nodes_dir / "__init__.py"
-    output_path.write_text(content, encoding="utf-8")
+    output_path.write_text(content, encoding="utf-8", newline="\n")

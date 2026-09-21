@@ -86,5 +86,9 @@ def generate_state_file(
 
     content = "\n".join(lines) + "\n"
     output_path = output_dir / "state.py"
-    output_path.write_text(content, encoding="utf-8")
+    # newline="\n" pins LF on every platform. Left to the default, Python's text
+    # mode rewrites "\n" to os.linesep, so a native Windows run would emit CRLF
+    # while the container (Linux) emits LF -- the same DSL would produce
+    # byte-different output depending on how the converter was run (ADR-0001).
+    output_path.write_text(content, encoding="utf-8", newline="\n")
     logger.info("Generated: %s", output_path)
