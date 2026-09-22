@@ -103,7 +103,7 @@ native process a UNC working directory, so `uv.exe` would otherwise run against
 
 The checks are grouped: **B** the converter runs, **C** console code page,
 **D** PowerShell environment variables, **E** Docker, **F** generated workflows
-actually execute. F is the one that matters to a customer -- it runs a generated
+actually execute, **G** real LLM calls (opt-in via `-WithLlm`). F is the one that matters to a customer -- it runs a generated
 package through `scripts/run_generated.py`, which prints the final GraphState as
 ASCII-only JSON, and asserts the graph really executed: every node visited, the
 End Node forwarding an upstream value (ADR-0004), a Branching Node resolving to
@@ -117,6 +117,21 @@ Windows host.
 python scripts/run_generated.py out my_workflow
 python scripts/run_generated.py out my_workflow --initial '{"start_node": {}}'
 ```
+
+Everything except G is deterministic, offline and free -- every conversion uses
+`--skip-implement`, so no model is ever called (ADR-0001). `-WithLlm` adds:
+
+- **G1** the LLM fills node bodies at conversion time; the result must compile, be
+  LF, and have no `# TODO: Implement` left
+- **G2** that LLM-implemented package runs
+- **G3** a generated workflow calls a real model at run time, which is what
+  exercises `.env` discovery from the generated package and the provider SDK
+
+G costs money and needs network access. Credentials come from the environment or
+a `.env` in `RepoRoot`; only their *names* are ever printed. Note the asymmetry:
+the converter's provider registry covers bedrock/openai/anthropic, while the
+generated `llm.py` also supports google -- so a Google-only setup can run G3 but
+not G1/G2.
 
 The script can be dry-run on macOS/Linux with PowerShell installed
 (`brew install powershell`), which exercises its whole control flow before it is

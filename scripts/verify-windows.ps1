@@ -42,6 +42,12 @@
 .PARAMETER NoCopy
     Use RepoRoot as given, even when it is on a network share.
 
+.PARAMETER WithLlm
+    Also run the G group, which calls a real LLM and therefore costs money and
+    needs network access. Off by default: every other check is deterministic,
+    offline and free (ADR-0001). Credentials are read from the environment or
+    from a .env file in RepoRoot; nothing is ever printed.
+
 .EXAMPLE
     .\scripts\verify-windows.ps1
 
@@ -53,7 +59,8 @@ param(
     [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$ExpectedDigest = "",
     [switch]$SkipDocker,
-    [switch]$NoCopy
+    [switch]$NoCopy,
+    [switch]$WithLlm
 )
 
 # "Stop" applies to cmdlets only. Every external process goes through
@@ -64,6 +71,7 @@ param(
 # the environment report.
 $ErrorActionPreference = "Stop"
 $script:Results = @()
+$script:G1Succeeded = $false
 
 # Stamped by `git archive` via the export-subst attribute (.gitattributes). In a
 # working checkout it stays the literal placeholder. Printed in the environment
@@ -548,6 +556,20 @@ Write-Host "`n=== F. Generated workflows run ===" -ForegroundColor Cyan
 $runPy = Join-Parts $RepoRoot "scripts" "run_generated.py"
 $genDir = Join-Path $work "gen"
 
+function Get-ErrorDetail {
+    <#
+        .SYNOPSIS
+            The interesting part of a failed run's output.
+        .NOTES
+            The CLI logs progress at INFO, so a raw dump buries the one line that
+            says what went wrong. Prefer ERROR lines, fall back to the tail.
+    #>
+    param([string]$Output)
+    $errs = @($Output -split "`n" | Where-Object { $_ -match "ERROR|Traceback|Error code" })
+    if ($errs.Count -gt 0) { return ($errs | Select-Object -Last 3) -join "`n" }
+    return (@($Output -split "`n" | Select-Object -Last 5)) -join "`n"
+}
+
 function Get-StateJson {
     <# Pull the state object out of a runner invocation, or $null. #>
     param([pscustomobject]$Result)
@@ -622,6 +644,164 @@ if (-not $runtimeDepsOk) {
     } else {
         Add-Result "F3" "The end-to-end generated-workflow test suite passes" "SKIP" `
             "needs uv (pytest comes from the test dependency group)"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# G. Real LLM calls (opt-in: costs money, needs network)
+# ---------------------------------------------------------------------------
+Write-Host "`n=== G. LLM paths (opt-in) ===" -ForegroundColor Cyan
+
+function Get-LlmCredentialSources {
+    <#
+        .SYNOPSIS
+            Which LLM credentials are visible, and where from.
+        .OUTPUTS
+            Hashtable of variable name -> "env" or ".env". Values are never read
+            into the result, so nothing secret can reach the console.
+    #>
+    $wanted = @("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
+                "AWS_PROFILE", "LLM_PROVIDER", "LLM_MODEL")
+    $found = @{}
+    foreach ($name in $wanted) {
+        if ([Environment]::GetEnvironmentVariable($name)) { $found[$name] = "env" }
+    }
+    $envFile = Join-Path $RepoRoot ".env"
+    if (Test-Path $envFile) {
+        foreach ($line in @(Get-Content -LiteralPath $envFile)) {
+            if ($line -match '^\s*([A-Z0-9_]+)\s*=\s*\S') {
+                $key = $Matches[1]
+                if (($wanted -contains $key) -and (-not $found.ContainsKey($key))) {
+                    $found[$key] = ".env"
+                }
+            }
+        }
+    }
+    return $found
+}
+
+if (-not $WithLlm) {
+    Add-Result "G0" "LLM paths" "SKIP" "pass -WithLlm to run these (they call a real model)"
+} elseif (-not $runtimeDepsOk) {
+    Add-Result "G0" "LLM paths" "SKIP" "langgraph is not importable"
+} else {
+    $creds = Get-LlmCredentialSources
+    Write-Host ("  credentials visible: " +
+        $(if ($creds.Count) { ($creds.Keys | Sort-Object) -join ", " } else { "(none)" })) -ForegroundColor DarkGray
+
+    # The converter's own provider registry covers bedrock/openai/anthropic only
+    # (src/dify2langgraph/llm/__init__.py); google exists solely in the generated
+    # llm.py, so a Google-only setup can exercise runtime but not conversion.
+    $convProvider = $null
+    if ($creds.ContainsKey("OPENAI_API_KEY")) { $convProvider = "openai" }
+    elseif ($creds.ContainsKey("ANTHROPIC_API_KEY")) { $convProvider = "anthropic" }
+    elseif ($creds.ContainsKey("AWS_PROFILE")) { $convProvider = "bedrock" }
+
+    # Conversion and the generated package both look for .env by walking up from
+    # where they run, so put it beside the working directory.
+    $repoEnv = Join-Path $RepoRoot ".env"
+    if (Test-Path $repoEnv) { Copy-Item -LiteralPath $repoEnv -Destination $work -Force }
+
+    $llmDir = Join-Path $work "llm"
+
+    if (-not $convProvider) {
+        Add-Result "G1" "LLM fills node bodies at conversion time" "SKIP" `
+            "no openai/anthropic/bedrock credential; the converter does not support google"
+        Add-Result "G2" "An LLM-implemented workflow runs" "SKIP" "depends on G1"
+    } else {
+        Invoke-Checked "G1" "LLM fills node bodies at conversion time" {
+            $r = Invoke-Converter @("simple_workflow.yml", "-o", $llmDir,
+                "--llm-provider", $convProvider) $work
+            $nodes = Join-Parts $llmDir "simple_workflow" "nodes"
+            if ($r.ExitCode -ne 0 -or -not (Test-Path $nodes)) {
+                Add-Result "G1" "LLM fills node bodies at conversion time" "FAIL" (Get-ErrorDetail $r.Output)
+                return
+            }
+            # Structural assertions only -- LLM output is not deterministic.
+            $files = @(Get-ChildItem $nodes -Filter *.py | Where-Object { $_.Name -ne "__init__.py" })
+            $stillStubbed = @($files | Where-Object {
+                [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::UTF8) -match "TODO: Implement"
+            })
+            $crlf = @($files | Where-Object {
+                [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::UTF8) -match "`r`n"
+            })
+            $compile = Invoke-Python @("-m", "py_compile") + @($files | ForEach-Object { $_.FullName })
+            if ($stillStubbed.Count -eq 0 -and $crlf.Count -eq 0 -and $compile.ExitCode -eq 0) {
+                $script:G1Succeeded = $true
+                Add-Result "G1" "LLM fills node bodies at conversion time" "PASS" `
+                    ("{0} node files implemented via {1}, all compile, all LF" -f $files.Count, $convProvider)
+            } else {
+                Add-Result "G1" "LLM fills node bodies at conversion time" "FAIL" `
+                    ("still stubbed: {0}; CRLF: {1}; compile exit {2}`n{3}" -f `
+                        $stillStubbed.Count, $crlf.Count, $compile.ExitCode, $compile.Output)
+            }
+        }
+
+        Invoke-Checked "G2" "An LLM-implemented workflow runs" {
+            # Without this the check passes on the deterministic stubs that the
+            # conversion wrote before the LLM step failed -- a false green.
+            if (-not $script:G1Succeeded) {
+                Add-Result "G2" "An LLM-implemented workflow runs" "SKIP" "G1 did not implement the nodes"
+                return
+            }
+            $r = Invoke-Python @($runPy, $llmDir, "simple_workflow")
+            $state = Get-StateJson $r
+            if ($state) {
+                Add-Result "G2" "An LLM-implemented workflow runs" "PASS" `
+                    ("final state keys: " + (@($state.PSObject.Properties.Name) -join ", "))
+            } else {
+                Add-Result "G2" "An LLM-implemented workflow runs" "FAIL" $r.Output
+            }
+        }
+    }
+
+    # Runtime-only path: works with any provider the generated llm.py supports,
+    # including google, so it is reachable even when conversion is not.
+    Invoke-Checked "G3" "A generated workflow calls a real model at run time" {
+        $rtDir = Join-Path $work "rt"
+        $null = Invoke-Converter @("simple_workflow.yml", "-o", $rtDir, "--skip-implement") $work
+        $node = Join-Parts $rtDir "simple_workflow" "nodes" "llm_node.py"
+        $src = [System.IO.File]::ReadAllText($node, [System.Text.Encoding]::UTF8)
+
+        # Stand in for an implemented body: call the model through the generated
+        # llm.py, which is what exercises .env discovery and the provider SDK.
+        $body = @'
+    from ..llm import get_chat_model
+
+    response = get_chat_model().invoke(
+        [HumanMessage(content="Reply with exactly: WINDOWS_LLM_OK")]
+    )
+    output: LlmNodeOutput = {
+        "text": response.content,
+        "usage": response.usage_metadata or {},
+    }
+'@
+        $src = $src.Replace("from langgraph.types import Command",
+            "from langchain_core.messages import HumanMessage`nfrom langgraph.types import Command")
+        $stub = "    output: LlmNodeOutput = {`n        `"text`": `"placeholder`",`n        `"usage`": {},`n    }"
+        if ($src -notmatch [regex]::Escape('"text": "placeholder"')) {
+            Add-Result "G3" "A generated workflow calls a real model at run time" "FAIL" `
+                "stub body not found; the generator's output shape changed"
+            return
+        }
+        $src = $src.Replace($stub, $body.TrimEnd())
+        [System.IO.File]::WriteAllText($node, $src, (New-Object System.Text.UTF8Encoding $false))
+
+        $r = Invoke-Python @($runPy, $rtDir, "simple_workflow")
+        $state = Get-StateJson $r
+        if (-not $state) {
+            Add-Result "G3" "A generated workflow calls a real model at run time" "FAIL" (Get-ErrorDetail $r.Output)
+            return
+        }
+        $text = $state.llm_node.text
+        # The End Node forwards the LLM output rather than a placeholder (ADR-0004).
+        if ($text -and $text -ne "placeholder" -and $state.end_node.result -eq $text) {
+            Add-Result "G3" "A generated workflow calls a real model at run time" "PASS" `
+                ("model replied {0}; End forwarded it" -f $text)
+        } else {
+            Add-Result "G3" "A generated workflow calls a real model at run time" "FAIL" `
+                ("llm_node.text = {0}" -f $text)
+        }
     }
 }
 

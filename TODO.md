@@ -73,6 +73,12 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
     Windows は WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は
     Parallels Desktop の Pro / Business 版専用で、Standard 版では有効化できない。
     実施するには Parallels のエディション変更か、別の Windows 実機が要る
+- [ ] **変換時のプロバイダに google が無い** — `llm/__init__.py` の登録は
+  bedrock / openai / anthropic のみ。一方 `templates/llm.py`（生成物の実行時）は
+  google を含む 4 つに対応しており、しかも実行時の既定が google。Google の API キー
+  しか持たない利用者は、生成物は動かせるのに `--name-nodes` やノード本体実装を
+  一切使えない（`Unknown provider 'google'`）。変換時プロバイダは langchain ではなく
+  生の SDK を使う作りなので、追加するなら `llm/google.py` を書くことになる
 - [ ] 依存の下限バージョンを実態に合わせる — 例 `langchain-core>=0.3.0` に対し lock は 1.6.3。
   `uv.lock` 経由なら問題ないが、lock を使わない `pip install .` では古い版が入りうる
 - [ ] 変換ツール用と生成物用の依存の分離（optional extras）— `--auto-fix` が `templates/llm.py` を
