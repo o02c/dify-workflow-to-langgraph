@@ -143,6 +143,37 @@ The two pairs are separate because the choices are independent -- a cheap model
 can write the node bodies while a different one runs them. Both surfaces support
 the same four providers (openai, anthropic, bedrock, google).
 
+## Git Bash
+
+`scripts/verify-gitbash.sh` is the companion for the other shell that exists in
+client environments. Git Bash is not PowerShell with different syntax: it runs on
+the MSYS2 runtime, which **rewrites arguments that look like Unix paths** before
+handing them to a native Windows process. That is why USAGE.md 9.2 tells Docker
+users to set `MSYS_NO_PATHCONV=1` and pass `$(pwd -W)` — without them, MSYS
+rewrites `target=/work` itself and the bind mount lands somewhere else.
+
+```bash
+scripts/verify-gitbash.sh --expected-digest "$(make -s verify-digest)" --with-llm
+```
+
+It shares the substantive work with the PowerShell script — both call
+`output_digest.py` and `run_generated.py` — so the two shells cannot disagree
+about what the output should be. The `M` group holds the MSYS-specific checks and
+reports SKIP elsewhere, which is how the script gets exercised on macOS before
+going to a Windows host. Lint it with `shellcheck`; the two remaining SC2016
+findings are intentional (`$Format:%H$` must stay literal, and the PATH line is
+instructional text).
+
+**`.gitattributes` pins `*.sh` to LF.** This is not cosmetic. With Git for
+Windows' default `core.autocrlf=true`, a cloned shell script gets CRLF, the
+shebang becomes `/usr/bin/env bash\r`, and Git Bash refuses to start it:
+
+```
+env: bash\r: No such file or directory
+```
+
+## Dry-running the verification scripts
+
 The script can be dry-run on macOS/Linux with PowerShell installed
 (`brew install powershell`), which exercises its whole control flow before it is
 handed to a Windows host:
