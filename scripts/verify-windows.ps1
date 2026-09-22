@@ -174,8 +174,22 @@ if (-not $NoCopy -and $RepoRoot.StartsWith("\\")) {
     Write-Host "Windows cannot give uv.exe or python.exe a UNC working directory," -ForegroundColor Yellow
     Write-Host "so copying to local disk first: $localRoot" -ForegroundColor Yellow
     New-Item -ItemType Directory -Path $localRoot -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $RepoRoot "*") -Destination $localRoot -Recurse -Force
-    Remove-Item (Join-Path $localRoot ".venv") -Recurse -Force -ErrorAction SilentlyContinue
+
+    # robocopy rather than Copy-Item. Copy-Item needs a trailing wildcard to copy
+    # directory *contents*, but -LiteralPath deliberately does not expand
+    # wildcards (and plain -Path with -Exclude does not filter subdirectories),
+    # so the obvious spelling silently copies nothing. robocopy takes two
+    # directories, handles UNC sources natively, and reports success as exit
+    # codes 0-7 -- 8 and above are real failures.
+    $rc = Invoke-Native -Exe "robocopy.exe" -Arguments @(
+        $RepoRoot, $localRoot, "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/NP",
+        "/XD", ".git", ".venv", "__pycache__", ".ruff_cache", ".pytest_cache")
+    if ($rc.ExitCode -ge 8) {
+        Write-Host "robocopy failed (exit $($rc.ExitCode)):" -ForegroundColor Red
+        Write-Host $rc.Output
+        exit 2
+    }
+
     $RepoRoot = $localRoot
     Write-Host "Copied.`n" -ForegroundColor Yellow
 }
@@ -230,7 +244,19 @@ if (-not $pyExe -and -not $uvExe) {
 $useUv = [bool]$uvExe
 $fixture = Join-Path $RepoRoot "tests\fixtures\guardduty_handler.yml"
 if (-not (Test-Path $fixture)) {
-    Write-Host "Fixture not found: $fixture -- is -RepoRoot correct?" -ForegroundColor Red
+    Write-Host "Fixture not found: $fixture" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "RepoRoot contains:" -ForegroundColor Yellow
+    $entries = @(Get-ChildItem -LiteralPath $RepoRoot -Force -ErrorAction SilentlyContinue)
+    if ($entries.Count -eq 0) {
+        Write-Host "  (nothing -- the copy or the archive is empty)" -ForegroundColor Yellow
+    } else {
+        $entries | ForEach-Object { Write-Host ("  {0}" -f $_.Name) -ForegroundColor Yellow }
+    }
+    Write-Host ""
+    Write-Host 'Expected a full checkout or "git archive" export. If tests/ is missing,' -ForegroundColor Yellow
+    Write-Host "re-export it; if it is present but the path above is a temp copy, the" -ForegroundColor Yellow
+    Write-Host "copy step dropped it -- re-run with -NoCopy from a local (non-UNC) path." -ForegroundColor Yellow
     exit 2
 }
 
