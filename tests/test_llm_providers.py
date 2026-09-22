@@ -10,7 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from dify2langgraph.cli import _credential_hint, _provider_kwargs
-from dify2langgraph.llm import LLMConfig
+from dify2langgraph.llm import LLMConfig, Message
+from dify2langgraph.llm.anthropic import AnthropicProvider
 from dify2langgraph.llm.bedrock import BedrockProvider
 
 CONFIG = LLMConfig(model="anthropic.claude-3-5-haiku-20241022-v1:0")
@@ -171,6 +172,47 @@ class TestCredentialHint:
 
     def test_unrelated_error_gets_no_hint(self):
         assert _credential_hint(ValueError("boom"), self.args()) is None
+
+
+class TestAnthropicTemperature:
+    """temperature is only sent to SDKs that still accept it.
+
+    anthropic 1.x removed temperature (and top_p) from ``messages.create()``.
+    pyproject declares ``anthropic>=0.75.0``, a range that spans both APIs, so the
+    provider asks the installed SDK instead of assuming. Passing it to 1.x fails
+    the entire call with "unexpected keyword argument 'temperature'" -- which
+    reads like a credentials problem and is easy to misdiagnose.
+    """
+
+    def _capture_kwargs(self, monkeypatch, create_params: set[str]) -> dict:
+        """Build a provider against a faked SDK surface and return the call kwargs."""
+        monkeypatch.setattr(
+            "dify2langgraph.llm.anthropic._CREATE_PARAMS", frozenset(create_params)
+        )
+        provider = AnthropicProvider(LLMConfig(model="claude-x", temperature=0.25), api_key="k")
+
+        response = MagicMock()
+        response.content = []
+        response.usage.input_tokens = 1
+        response.usage.output_tokens = 2
+        provider.client = MagicMock()
+        provider.client.messages.create.return_value = response
+
+        provider.generate([Message(role="user", content="hi")])
+        return provider.client.messages.create.call_args.kwargs
+
+    def test_temperature_sent_when_the_sdk_accepts_it(self, monkeypatch):
+        """Older SDKs still get the configured sampling temperature."""
+        kwargs = self._capture_kwargs(monkeypatch, {"model", "messages", "max_tokens", "temperature"})
+
+        assert kwargs["temperature"] == 0.25
+
+    def test_temperature_omitted_when_the_sdk_rejects_it(self, monkeypatch):
+        """anthropic 1.x: the call goes out without it rather than failing."""
+        kwargs = self._capture_kwargs(monkeypatch, {"model", "messages", "max_tokens"})
+
+        assert "temperature" not in kwargs
+        assert kwargs["model"] == "claude-x"
 
 
 class TestDotenvDiscovery:

@@ -1,9 +1,13 @@
 """Anthropic LLM provider."""
 
+import inspect
 import os
 
 import anthropic
+from anthropic.resources.messages import Messages
 from dotenv import find_dotenv, load_dotenv
+
+from dify2langgraph.logging_config import get_logger
 
 from .base import LLMConfig, LLMProvider, LLMResponse, Message
 
@@ -11,6 +15,14 @@ from .base import LLMConfig, LLMProvider, LLMResponse, Message
 # Once installed (uv sync / pip install) this module lives inside the venv,
 # so the default file-relative search never reaches the user's .env.
 load_dotenv(find_dotenv(usecwd=True))
+
+logger = get_logger(__name__)
+
+# anthropic 1.x dropped temperature and top_p from messages.create(). The declared
+# floor (anthropic>=0.75.0) still admits versions that accept them, so ask the
+# installed SDK rather than assuming either shape -- passing temperature to 1.x
+# fails the whole call with "unexpected keyword argument 'temperature'".
+_CREATE_PARAMS = frozenset(inspect.signature(Messages.create).parameters)
 
 
 class AnthropicProvider(LLMProvider):
@@ -74,9 +86,16 @@ class AnthropicProvider(LLMProvider):
             "model": self.config.model,
             "messages": conversation,
             "max_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
             **self.config.extra,
         }
+
+        if "temperature" in _CREATE_PARAMS:
+            kwargs["temperature"] = self.config.temperature
+        else:
+            logger.debug(
+                "anthropic %s does not accept temperature; sending without it",
+                anthropic.__version__,
+            )
 
         if system_content:
             kwargs["system"] = system_content

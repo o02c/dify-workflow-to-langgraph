@@ -79,6 +79,12 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   しか持たない利用者は、生成物は動かせるのに `--name-nodes` やノード本体実装を
   一切使えない（`Unknown provider 'google'`）。変換時プロバイダは langchain ではなく
   生の SDK を使う作りなので、追加するなら `llm/google.py` を書くことになる
+- [x] **`--llm-provider anthropic` が SDK 非互換で常に失敗していた** — anthropic 1.x が
+  `messages.create()` から `temperature` を削除したのに渡し続けており、
+  `unexpected keyword argument 'temperature'` で全呼び出しが落ちていた。宣言下限
+  `anthropic>=0.75.0` は受け付ける版と受け付けない版の両方を含むため、インストール版の
+  シグネチャを見て渡すか判断する形にした。検証スクリプトに `-LlmProvider` を足して
+  初めて表面化した（既定の自動選択は OpenAI を優先するため anthropic に到達しない）
 - [ ] 依存の下限バージョンを実態に合わせる — 例 `langchain-core>=0.3.0` に対し lock は 1.6.3。
   `uv.lock` 経由なら問題ないが、lock を使わない `pip install .` では古い版が入りうる
 - [ ] 変換ツール用と生成物用の依存の分離（optional extras）— `--auto-fix` が `templates/llm.py` を
