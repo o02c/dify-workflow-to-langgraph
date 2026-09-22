@@ -255,8 +255,22 @@ function Get-RealPythonPath {
 # prefix so the value is a plain path.
 $RepoRoot = $RepoRoot -replace '^Microsoft\.PowerShell\.Core\\FileSystem::', ''
 
+function Get-PathKey {
+    <# Short stable hash of a path, so the same source maps to the same copy. #>
+    param([string]$Path)
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    $bytes = $md5.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Path.ToLowerInvariant()))
+    return (([System.BitConverter]::ToString($bytes)) -replace '-', '').Substring(0, 8).ToLowerInvariant()
+}
+
+$originalRepoRoot = $RepoRoot
+
 if (-not $NoCopy -and $RepoRoot.StartsWith("\\")) {
-    $localRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("d2l-repo-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    # Deterministic name, not a fresh GUID: robocopy then updates the copy in
+    # place and the .venv uv builds there survives between runs. With a new
+    # directory every time, uv re-resolves from PyPI on each run -- which is slow
+    # and turns any network hiccup into a cascade of unrelated check failures.
+    $localRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("d2l-repo-" + (Get-PathKey $RepoRoot))
     Write-Host "RepoRoot is on a network share:" -ForegroundColor Yellow
     Write-Host "  $RepoRoot" -ForegroundColor Yellow
     Write-Host "Windows cannot give uv.exe or python.exe a UNC working directory," -ForegroundColor Yellow
@@ -276,6 +290,15 @@ if (-not $NoCopy -and $RepoRoot.StartsWith("\\")) {
         Write-Host "robocopy failed (exit $($rc.ExitCode)):" -ForegroundColor Red
         Write-Host $rc.Output
         exit 2
+    }
+
+    # .env is gitignored, so it is never in a `git archive` export and is placed
+    # beside it by hand. Copy it explicitly rather than trusting the bulk copy to
+    # pick up a dotfile across an SMB share.
+    $srcEnv = Join-Path $originalRepoRoot ".env"
+    if (Test-Path $srcEnv) {
+        Copy-Item -LiteralPath $srcEnv -Destination (Join-Path $localRoot ".env") -Force
+        Write-Host "Carried .env across." -ForegroundColor Yellow
     }
 
     $RepoRoot = $localRoot
@@ -394,6 +417,22 @@ function Invoke-Python {
     return Invoke-Native -Exe $pyExe -WorkDir $WorkDir -EnvVars $EnvVars -DecodeAs $DecodeAs `
         -Arguments $PyArgs
 }
+
+# Force the virtualenv to exist before any check runs. uv builds it on first use
+# and needs PyPI for that; letting it happen inside B1 reports a network timeout
+# as "converting a DSL failed", and every downstream check then fails too.
+Write-Host "`nPreparing the Python environment (first run downloads dependencies)..." -ForegroundColor Cyan
+$preflight = Invoke-Python @("--version") $RepoRoot
+if ($preflight.ExitCode -ne 0) {
+    Write-Host "Could not prepare the environment:" -ForegroundColor Red
+    Write-Host $preflight.Output
+    Write-Host ""
+    Write-Host "This is an environment problem, not a product failure -- usually no" -ForegroundColor Yellow
+    Write-Host "route to pypi.org, or a proxy that needs HTTPS_PROXY set. Nothing" -ForegroundColor Yellow
+    Write-Host "below would be meaningful, so stopping here." -ForegroundColor Yellow
+    exit 2
+}
+Write-Host ("Ready: " + $preflight.Output.Trim()) -ForegroundColor DarkGray
 
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("d2l-verify-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Path $work -Force | Out-Null
@@ -712,6 +751,8 @@ if (-not $WithLlm) {
     Add-Result "G0" "LLM paths" "SKIP" "langgraph is not importable"
 } else {
     $creds = Get-LlmCredentialSources
+    $envPath = Join-Path $RepoRoot ".env"
+    Write-Host ("  .env: " + $(if (Test-Path $envPath) { $envPath } else { "not found at $envPath" })) -ForegroundColor DarkGray
     Write-Host ("  credentials visible: " +
         $(if ($creds.Count) { ($creds.Keys | Sort-Object) -join ", " } else { "(none)" })) -ForegroundColor DarkGray
 
