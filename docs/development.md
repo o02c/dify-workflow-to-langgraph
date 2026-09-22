@@ -72,10 +72,21 @@ make verify-digest
 ```
 
 `verify-windows.ps1` is written for Windows PowerShell 5.1 (still the default shell
-on most Windows hosts), installs nothing, and skips the Docker group automatically
-when no daemon is reachable. Note that Docker Desktop for Windows needs WSL2, so
-inside a Parallels VM it requires nested virtualization to be enabled; the native
-checks run fine without it.
+on most Windows hosts), installs nothing, and skips groups it cannot run rather
+than failing them.
+
+Its only prerequisite is **uv** -- installing uv alone is enough, because uv
+downloads CPython itself and needs no administrator rights:
+
+```powershell
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+The Docker group is skipped when no daemon is reachable. Worth knowing before
+planning that part: Docker Desktop for Windows requires WSL2, i.e. nested
+virtualization, and in Parallels Desktop nested virtualization is a Pro/Business
+feature -- on the Standard edition it cannot be enabled at all. The native checks
+need no Docker and cover the failure modes that prompted this work.
 
 Generated files are written with `newline="\n"` so they are LF on every platform.
 Left to Python's default, a native Windows run would emit CRLF while the container

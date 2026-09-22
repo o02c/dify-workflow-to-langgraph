@@ -11,6 +11,15 @@
     The script only reads and writes inside a temporary directory plus the repo's
     own tests/fixtures; it installs nothing and changes no machine settings.
 
+    Prerequisite: uv on PATH. Installing uv alone is enough -- it downloads
+    CPython itself, so Python need not be installed separately, and it needs no
+    administrator rights:
+
+        powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+    A bare `python` on PATH also works, but then the project's dependencies must
+    already be installed into it or the section C checks will be skipped.
+
 .PARAMETER RepoRoot
     Path to a checkout of this repository. Defaults to the parent of this script.
 
@@ -108,7 +117,12 @@ try {
 } | Format-List
 
 if (-not $pyExe -and -not $uvExe) {
-    Write-Host "Neither python nor uv is on PATH. Install Python 3.13 (or uv) and re-run." -ForegroundColor Red
+    Write-Host "Neither uv nor python is on PATH." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Installing uv alone is enough -- it downloads CPython 3.13 itself," -ForegroundColor Yellow
+    Write-Host "needs no administrator rights, and is what the checks below prefer:" -ForegroundColor Yellow
+    Write-Host '  powershell -c "irm https://astral.sh/uv/install.ps1 | iex"' -ForegroundColor Cyan
+    Write-Host "Then open a new shell so PATH picks it up, and re-run this script." -ForegroundColor Yellow
     exit 2
 }
 
@@ -143,6 +157,20 @@ function Invoke-Converter {
     } finally {
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
     }
+}
+
+function Invoke-Python {
+    <#
+        .SYNOPSIS
+            Run Python, through uv when it is available.
+        .NOTES
+            uv is the recommended (and sufficient) install on Windows: it fetches
+            CPython itself, so a bare `python` need not be on PATH at all. Calling
+            `python` directly would fail in exactly that setup.
+    #>
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$PyArgs)
+    if ($useUv) { return & uv run --project $RepoRoot python @PyArgs 2>&1 }
+    return & python @PyArgs 2>&1
 }
 
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("d2l-verify-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -212,7 +240,17 @@ Invoke-Checked "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" {
 # so the two platforms cannot drift apart in how they hash the output. Stdlib only
 # in --dir mode, so it works without the package being installed.
 $digestPy = Join-Path $RepoRoot "scripts\output_digest.py"
-$digest = (& python $digestPy --dir $genRoot).Trim()
+# Must not throw: if B1 failed there is nothing to digest, and $ErrorActionPreference
+# is "Stop", so an unguarded failure here would abort the whole script.
+$digest = "(unavailable)"
+try {
+    if (Test-Path $genRoot) {
+        $out = Invoke-Python $digestPy --dir $genRoot
+        if ($LASTEXITCODE -eq 0) { $digest = ($out | Select-Object -Last 1).ToString().Trim() }
+    }
+} catch {
+    $digest = "(unavailable: " + $_.Exception.Message + ")"
+}
 
 Invoke-Checked "B5" "Output is byte-identical to the macOS/container run" {
     if (-not $ExpectedDigest) {
@@ -231,16 +269,40 @@ Invoke-Checked "B5" "Output is byte-identical to the macOS/container run" {
 # ---------------------------------------------------------------------------
 Write-Host "`n=== C. Console code page (USAGE 8.1) ===" -ForegroundColor Cyan
 
-# Give one node a Japanese return value, standing in for an implemented body,
-# so `python -m <pkg>` actually has non-ASCII in the state it prints.
-$simple = Join-Path $RepoRoot "tests\fixtures\simple_workflow.yml"
-Copy-Item $simple -Destination $work -Force
-$null = Invoke-Converter @("simple_workflow.yml", "-o", "run", "--skip-implement") $work
+# These checks *run* a generated package, so langgraph and friends have to be
+# importable. With uv that is automatic (the repo's own environment is used);
+# with a bare system python the user would have to install the project first.
+# Detect that up front so a missing dependency reports as SKIP with a usable
+# instruction, rather than as a FAIL that looks like a product defect.
+$null = Invoke-Python -c "import langgraph"
+$runtimeDepsOk = ($LASTEXITCODE -eq 0)
+
+if (-not $runtimeDepsOk) {
+    Add-Result "C0" "Console code page checks" "SKIP" ('langgraph is not importable. ' +
+        'Install uv (it also fetches Python) and re-run, or pip install ' + $RepoRoot +
+        ' into the active interpreter.')
+}
+
 $pkgParent = Join-Path $work "run"
-$llmNode = Join-Path $pkgParent "simple_workflow\nodes\llm_node.py"
-$src = [System.IO.File]::ReadAllText($llmNode, [System.Text.Encoding]::UTF8)
-$src = $src.Replace('"text": "placeholder"', '"text": "翻訳結果"')
-[System.IO.File]::WriteAllText($llmNode, $src, (New-Object System.Text.UTF8Encoding $false))
+
+if ($runtimeDepsOk) {
+    # Give one node a Japanese return value, standing in for an implemented body,
+    # so running the package actually has non-ASCII in the state it prints.
+    # Kept inside the guard: this is top-level code, and with
+    # $ErrorActionPreference = "Stop" a missing generated file would abort the run.
+    try {
+        $simple = Join-Path $RepoRoot "tests\fixtures\simple_workflow.yml"
+        Copy-Item $simple -Destination $work -Force
+        $null = Invoke-Converter @("simple_workflow.yml", "-o", "run", "--skip-implement") $work
+        $llmNode = Join-Path $pkgParent "simple_workflow\nodes\llm_node.py"
+        $src = [System.IO.File]::ReadAllText($llmNode, [System.Text.Encoding]::UTF8)
+        $src = $src.Replace('"text": "placeholder"', '"text": "翻訳結果"')
+        [System.IO.File]::WriteAllText($llmNode, $src, (New-Object System.Text.UTF8Encoding $false))
+    } catch {
+        $runtimeDepsOk = $false
+        Add-Result "C0" "Console code page checks" "SKIP" ("setup failed: " + $_.Exception.Message)
+    }
+}
 
 function Invoke-Package {
     param([hashtable]$Env)
@@ -252,7 +314,7 @@ function Invoke-Package {
     try {
         Push-Location $pkgParent
         try {
-            $out = & python -m simple_workflow 2>&1
+            $out = Invoke-Python -m simple_workflow
             return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($out -join "`n") }
         } finally { Pop-Location }
     } finally {
@@ -260,7 +322,7 @@ function Invoke-Package {
     }
 }
 
-Invoke-Checked "C1" "Without PYTHONUTF8, printing non-ASCII state does not crash" {
+if ($runtimeDepsOk) { Invoke-Checked "C1" "Without PYTHONUTF8, printing non-ASCII state does not crash" {
     $r = Invoke-Package @{ PYTHONUTF8 = $null; PYTHONIOENCODING = $null }
     if ($r.ExitCode -eq 0 -and $r.Output -notmatch "UnicodeEncodeError") {
         $escaped = if ($r.Output -match '\\u7ffb') { " (escaped as \uXXXX, as documented)" } else { " (rendered directly)" }
@@ -269,16 +331,16 @@ Invoke-Checked "C1" "Without PYTHONUTF8, printing non-ASCII state does not crash
     } else {
         Add-Result "C1" "Without PYTHONUTF8, printing non-ASCII state does not crash" "FAIL" $r.Output
     }
-}
+} }
 
-Invoke-Checked "C2" "With PYTHONUTF8=1, Japanese is printed correctly" {
+if ($runtimeDepsOk) { Invoke-Checked "C2" "With PYTHONUTF8=1, Japanese is printed correctly" {
     $r = Invoke-Package @{ PYTHONUTF8 = "1" }
     if ($r.ExitCode -eq 0 -and $r.Output -match "翻訳結果") {
         Add-Result "C2" "With PYTHONUTF8=1, Japanese is printed correctly" "PASS"
     } else {
         Add-Result "C2" "With PYTHONUTF8=1, Japanese is printed correctly" "FAIL" $r.Output
     }
-}
+} }
 
 # ---------------------------------------------------------------------------
 # D. PowerShell environment-variable syntax (USAGE 8.2)
@@ -352,7 +414,7 @@ if ($SkipDocker) {
                 Add-Result "E2" "--mount handles a Windows drive-letter source path (USAGE 9)" "FAIL" ($out -join "`n")
             }
 
-            $d = (& python $digestPy --dir (Join-Path $dockerOut "out\guardduty_handler")).Trim()
+            $d = (Invoke-Python $digestPy --dir (Join-Path $dockerOut "out\guardduty_handler")).Trim()
             if ($d -eq $digest) {
                 Add-Result "E3" "Container output matches the native Windows run byte for byte" "PASS" $d
             } else {
