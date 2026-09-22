@@ -52,6 +52,11 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   出力のバイト一致は `make verify-digest`（macOS/Linux）と `-ExpectedDigest`（Windows）で突き合わせる
   - [x] macOS 側の基準値と Linux コンテナ側の検証は完了（両者一致）
   - [ ] Windows 実機でのネイティブ CLI 検証（B/C/D 群）。Docker 不要で実施できる
+  - [ ] **Git Bash 経路の検証** — 顧客環境には Git Bash があるため、PowerShell と並ぶ
+    実使用経路。`MSYS_NO_PATHCONV=1` と `$(pwd -W)` を使う形を USAGE.md 9.2 に書いたが
+    **実機未検証**。MSYS2 のパス変換は `target=/work` にも及ぶので、ここを外すと
+    マウント先が化ける。検証は `verify-windows.ps1` の bash 版を起こすか、
+    B/C 群をシェル非依存な形に切り出して両方から呼ぶ形が考えられる
   - [ ] Windows 実機での Docker 検証（E 群）— **現状の手元環境では不可**。Docker Desktop for
     Windows は WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は
     Parallels Desktop の Pro / Business 版専用で、Standard 版では有効化できない。

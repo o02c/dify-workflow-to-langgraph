@@ -264,6 +264,10 @@ PowerShell / コマンドプロンプトでは使えません。以下に読み�
 | `VAR=値 command` | `$env:VAR = "値"` の後に `command` | `set VAR=値` の後に `command` |
 | `PYTHONPATH=src python -m ...` | `$env:PYTHONPATH = "src"` の後に `python -m ...` | `set PYTHONPATH=src` の後に `python -m ...` |
 
+**Git Bash を使う場合は、左端の bash 列がそのまま使えます。** `export VAR=値` も
+`VAR=値 command` も期待どおり動きます。ただし Docker と組み合わせるときだけは
+パス変換に注意が必要です（[9.2](#92-変換する)参照）。
+
 環境変数を使わず、実行ディレクトリに `.env` ファイルを置く方法（[5 章](#5-rag知識取得の設定)参照）
 が最も移植性が高くおすすめです。
 
@@ -337,6 +341,24 @@ docker run --rm `
   --mount type=bind,source="$PWD",target=/work `
   dify2langgraph workflow.yml -o outputs --skip-implement
 ```
+
+Git Bash の場合:
+
+```bash
+MSYS_NO_PATHCONV=1 docker run --rm \
+  --mount type=bind,source="$(pwd -W)",target=/work \
+  dify2langgraph workflow.yml -o outputs --skip-implement
+```
+
+> **Git Bash では 2 点の読み替えが必要です。**
+>
+> 1. `MSYS_NO_PATHCONV=1` を付ける。Git Bash は MSYS2 のランタイム上で動いており、
+>    Unix のパスに見える引数を Windows のパスへ自動変換してから、ネイティブの実行ファイルに
+>    渡します。この変換は `target=/work` にも及び、`C:/Program Files/Git/work` のような
+>    別物に化けます。この環境変数で変換を無効化できます。
+> 2. `$PWD` ではなく `$(pwd -W)` を使う。Git Bash の `$PWD` は `/c/Users/you/project` という
+>    Unix 形式ですが、Docker が期待するのは `C:/Users/you/project` です。`pwd -W` が
+>    Windows 形式を返します。
 
 > **`-v` ではなく `--mount type=bind,source=...` を使ってください。** Windows のパスは
 > `C:\Users\you\project:/work` のようにドライブレターのコロンを含み、`-v` のパーサが
