@@ -303,6 +303,89 @@ class TestSelfContainedPackage:
             assert "get_retriever().retrieve(" in kr
 
 
+class TestStartNodeInputContract:
+    """Where a workflow's inputs live is fixed by the generator, not guessed."""
+
+    def test_start_body_reads_the_callers_slot(self):
+        """ADR-0002 address, emitted deterministically rather than left to an LLM."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "start_node.py").read_text(encoding="utf-8")
+
+            assert 'supplied = state.get("start_node", {})' in body
+            assert 'supplied["query"]' in body
+            # No TODO marker: the LLM pass skips it, so it cannot invent an address.
+            assert "TODO: Implement" not in body
+
+    def test_main_supplies_the_declared_inputs(self):
+        """`python -m <pkg>` must still run, so the example carries real inputs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "guardduty_handler.yml", output_dir)
+
+            main = (output_dir / "__main__.py").read_text(encoding="utf-8")
+
+            assert '"finding": "example"' in main
+            assert '"severity": 0.0' in main  # number, not a string
+
+    def _generate_with_start_variables(self, tmpdir: str, variables: list[dict]) -> str:
+        """Generate from simple_workflow with the Start Node's variables replaced."""
+        import yaml
+
+        dsl = yaml.safe_load((FIXTURES_DIR / "simple_workflow.yml").read_text(encoding="utf-8"))
+        for node in dsl["workflow"]["graph"]["nodes"]:
+            if node["data"].get("type") == "start":
+                node["data"]["variables"] = variables
+
+        source = Path(tmpdir) / "custom.yml"
+        source.write_text(yaml.dump(dsl), encoding="utf-8")
+        output_dir = Path(tmpdir) / "out"
+        translate(source, output_dir)
+        return (output_dir / "nodes" / "start_node.py").read_text(encoding="utf-8")
+
+    def test_dsl_default_is_honoured(self):
+        """A default set in Dify must survive into the generated fallback.
+
+        Falling back to "" instead would make the generated package behave
+        differently from the workflow it was converted from, silently.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            body = self._generate_with_start_variables(
+                tmpdir,
+                [{"variable": "lang", "type": "text-input", "required": False, "default": "en"}],
+            )
+
+            assert "supplied.get(\"lang\", 'en')" in body
+
+    def test_a_default_makes_a_required_variable_satisfiable(self):
+        """Required + default is not "missing": there is already a value to use."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            body = self._generate_with_start_variables(
+                tmpdir,
+                [
+                    {"variable": "query", "type": "text-input", "required": True},
+                    {"variable": "topk", "type": "number", "required": True, "default": 5},
+                ],
+            )
+
+            assert 'missing = [name for name in ("query",)' in body
+            assert "topk" not in body.split("missing = ")[1].split("]")[0]
+            assert 'supplied.get("topk", 5)' in body
+
+    def test_optional_inputs_get_defaults(self):
+        """Only required variables are enforced; optional ones fall back."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "translation_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1721117927142.py").read_text(encoding="utf-8")
+
+            assert 'supplied["source_text"]' in body  # required
+            assert 'supplied.get("country", "")' in body  # required: false
+
+
 class TestGeneratedOutputIsByteStableAcrossPlatforms:
     """The same DSL must produce the same bytes wherever the converter runs."""
 

@@ -273,6 +273,7 @@ v1 決定論コア（ADR 0002–0007）は実装＋実サーバ検証まで完�
 - 自己完結パッケージ化（相対 import・`python -m`）
 - RAG Retriever ポート（Dify API、実 1.16.1 で検証）
 - 変換ツールの Docker 配布・Windows のコードページ対応（[ADR-0008](./adr/0008-converter-ships-as-a-docker-image.md)）
+- [ADR-0009](./adr/0009-workflow-inputs-arrive-in-the-start-nodes-state-slot.md) — ワークフロー入力は Start ノードの state スロットで受け取る
 
 **未対応 / 保留**（[TODO.md](../TODO.md) 参照）
 - **iteration（ループ）** — ループ全体が 1 ノードで内部にサブグラフを持つ表現。Handler 形状が未確定（唯一の大きなアーキ課題）

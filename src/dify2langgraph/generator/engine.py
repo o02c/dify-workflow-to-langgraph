@@ -68,7 +68,9 @@ Guidelines:
 4. Return a Command with the update dictionary
 5. Handle errors gracefully
 6. Follow the expected output structure from the TypedDict
-7. Keep imports at the top of the file, after sys.path.insert if needed
+7. Keep imports at the top of the file. The node file lives inside a package
+   (`<package>/nodes/<node>.py`), so siblings are reached with relative imports:
+   `from ..llm import ...`, `from ..state import ...`. Never add sys.path entries.
 8. Use modern Python SDK APIs (OpenAI v1.0+, Anthropic, etc.)
 """
 
@@ -88,15 +90,18 @@ NODE_IMPLEMENTATION_PROMPT = """Implement the following LangGraph node function.
 1. Replace the TODO placeholder with actual implementation
 2. Access input variables using state_access from variable_references (already uses correct state keys)
 3. Return Command(update={{state_key: output}}) - use "state_key" from config, NOT "id"
-4. For start nodes: read input from state[state_key] (initial state passed to workflow)
-5. Keep sys.path.insert BEFORE local imports (state, etc.)
+4. Use relative imports for anything in the generated package: `from ..llm import ...`,
+   `from ..retriever import ...`, `from ..state import ...`. The file is at
+   `<package>/nodes/<node>.py`. Do NOT add sys.path entries -- the package is
+   self-contained and is run with `python -m <package>`.
+5. Keep the existing module docstring and NODE_CONFIG_JSON block unchanged.
 
 ## Node Type Specific Guidelines
 
 ### LLM nodes (type: llm)
-Import LLM from a shared module and use LangChain's chat model interface:
+Import LLM from the package's shared module and use LangChain's chat model interface:
 ```python
-from llm import get_chat_model  # Shared LLM configuration
+from ..llm import get_chat_model  # Shared LLM configuration
 from langchain_core.messages import HumanMessage, SystemMessage
 
 llm = get_chat_model()  # Returns ChatOpenAI, ChatAnthropic, etc.
@@ -110,13 +115,18 @@ usage = response.usage_metadata or {{}}
 ```
 
 ### knowledge-retrieval nodes
-Import retriever from a shared module:
+Call the Retriever port. It takes a query and dataset ids and returns a list of
+plain dicts -- there is no .invoke() and no document object:
 ```python
-from retriever import get_retriever
-retriever = get_retriever()
-docs = retriever.invoke(query)
-result = [{{"content": doc.page_content, "metadata": doc.metadata}} for doc in docs]
+from ..retriever import get_retriever
+
+result = get_retriever().retrieve(query=query, dataset_ids=["<dataset-id>"])
 ```
+
+## Node types you will not be asked to implement
+start, end and knowledge-retrieval nodes are generated deterministically from the
+DSL and never reach you. In particular the Start Node surfaces the caller's
+workflow inputs from its own state slot; do not write code that invents them.
 
 ### code nodes
 Execute the embedded code safely using exec() with limited globals.

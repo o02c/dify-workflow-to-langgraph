@@ -154,6 +154,10 @@ def _generate_node_file(
     else:
         lines.append(f"    # Deterministic {node.type} node (generated from the Dify DSL)")
     lines.append("")
+    prelude = handler.body_prelude(node, graph, node_name_map)
+    if prelude:
+        lines.extend(prelude)
+        lines.append("")
     stub_output = handler.stub_output(node, graph, node_name_map)
     lines.append(f"    output: {class_name} = {{")
     for field_name, literal in stub_output.items():

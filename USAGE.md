@@ -102,15 +102,33 @@ cd output
 python -m <入力ファイル名>     # 例: python -m workflow
 ```
 
-Python から使う場合:
+### ワークフローに入力を渡す
+
+Dify の Start ノードが宣言している変数が、そのワークフローの入力です。
+**Start ノード自身の state キーの下**に渡してください（ADR-0009）。
 
 ```python
 from workflow import build_graph
 
 graph = build_graph()
-result = graph.invoke({"start_node": {}})
+result = graph.invoke({"start_node": {"query": "調べたいこと"}})
 print(result)
 ```
+
+キー名（`start_node` の部分）は生成物の `state.py` を見れば分かります。`python -m`
+で実行した場合は、宣言から作られた例の入力が `__main__.py` に入っているので、
+そのまま雛形として使えます。
+
+> **宣言されていないキーは捨てられます。** Start ノードは宣言された変数だけを
+> 通すので、`{"start_node": {"quey": "..."}}` のような打ち間違いは値が届かないまま
+> 既定値になります（必須変数の綴り間違いなら下記のエラーで気づけます）。
+> 変数名は生成物の `state.py` で確認できます。
+
+> **必須の入力が欠けていると実行時に失敗します。** Dify 側で `required: true` の
+> 変数は、値を捏造せず `ValueError` になります。どの変数が足りないかはメッセージに
+> 出ます。`required: false` の変数は既定値にフォールバックします。Dify 側で `default` を
+> 設定していればその値、無ければ文字列は空文字・数値は `0.0` です。`default` がある
+> 変数は `required: true` でもエラーになりません（渡すべき値が既にあるため）。
 
 > パッケージのディレクトリ名は有効な Python 識別子である必要があります（ハイフン不可・数字始まり不可）。
 > 入力ファイル名がこれに反する場合は、出力ディレクトリ名をリネームしてから実行してください。

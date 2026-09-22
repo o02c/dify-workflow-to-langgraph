@@ -53,7 +53,7 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   - [x] macOS 側の基準値と Linux コンテナ側の検証は完了（両者一致）
   - [x] Windows 実機でのネイティブ CLI 検証（B/C/D 群）— **完了**。
     Windows 11 ARM64 / PowerShell 5.1 / en-US / コードページ 437 で 8 項目パス
-    - 生成物が macOS・Linux コンテナとバイト一致（digest 68c3dd1f…）。OS をまたいだ
+    - 生成物が macOS・Linux コンテナとバイト一致。OS をまたいだ
       決定論が実機で裏付けられた（ADR-0001）
     - 生成物の改行が LF（`newline="\n"` の修正が実機で効いている）
     - `PYTHONUTF8` 未設定でも `\uXXXX` にエスケープされて落ちない
@@ -82,19 +82,13 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   `anthropic>=0.75.0` は受け付ける版と受け付けない版の両方を含むため、インストール版の
   シグネチャを見て渡すか判断する形にした。検証スクリプトに `-LlmProvider` を足して
   初めて表面化した（既定の自動選択は OpenAI を優先するため anthropic に到達しない）
-- [ ] **ワークフロー入力の所在が未定義** — 生成物を `invoke()` するとき、Start ノードが
-  宣言した変数をどこに置くのかが決まっていない。`GraphState` にトップレベルのキーは無く、
-  決定論版の Stub は入力を読まずに値を捏造するため問題が表面化しない。ADR-0004 は
-  非 End ノードへの入力配線を LLM 本体生成と共に来るものとして先送りしている。
-  結果、LLM が毎回推測し、`state["query"]` と `state["start_node"]["query"]` の間で
-  実行ごとに揺れる（Windows 実機の G2 で観測。3 回中 1 回が前者）。
-  しかも**前者は成立不能**で、LangGraph は `GraphState` のスキーマに無いキーを捨てるため、
-  呼び出し側が何を渡してもそのコードは動かない（実測確認済み）。ADR-0002 に従えば
-  後者が正だが、どこにも明示されておらず `generator/engine.py` のプロンプトも指示して
-  いない。住所を決めて、プロンプトと USAGE の実行例の両方に反映する必要がある
-- [ ] `generator/engine.py` のプロンプトが ADR-0007 以前のまま — `sys.path.insert` や
+- [x] **ワークフロー入力の所在が未定義** — ADR-0009 で解消。Start ノードを決定論化し、
+  呼び出し側の値を自分の state スロットから読む（従来の Stub は呼び出し側の値を
+  上書きしており、そもそも入力を渡す手段が無かった）。必須入力の欠落は ValueError。
+  TODO マーカーが消えたため LLM パスの対象外になり、住所を推測されることも無くなった
+- [x] `generator/engine.py` のプロンプトを ADR-0007 に追随させた — 以前は `sys.path.insert` や
   絶対 import（`from llm import ...`）を指示しており、生成される本体が自己完結
-  パッケージの形に反する。上記の入力住所の件と同じ箇所を直すことになる
+  パッケージの形に反していた。Retriever の例も実 API と違っていた（ADR-0009 と同時に修正）
 - [ ] 依存の下限バージョンを実態に合わせる — 例 `langchain-core>=0.3.0` に対し lock は 1.6.3。
   `uv.lock` 経由なら問題ないが、lock を使わない `pip install .` では古い版が入りうる
 - [ ] 変換ツール用と生成物用の依存の分離（optional extras）— `--auto-fix` が `templates/llm.py` を

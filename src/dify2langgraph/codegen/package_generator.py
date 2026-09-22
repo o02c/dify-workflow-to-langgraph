@@ -10,6 +10,7 @@ run does not die on a legacy Windows console codepage.
 
 from pathlib import Path
 
+from dify2langgraph.codegen.handlers import start_input_example
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import WorkflowGraph
@@ -45,8 +46,13 @@ def generate_package_files(
     # Entry point: build the graph and invoke it with an example initial state.
     if graph.start_node_id:
         start_func, _ = get_node_names(graph.start_node_id, node_name_map)
+        # The Start Node rejects missing required inputs, so an empty initial
+        # state would make `python -m <package>` fail immediately. Build the
+        # example from the DSL's own variable declarations instead.
+        start_inputs = start_input_example(graph.nodes[graph.start_node_id])
     else:
         start_func = "start"
+        start_inputs = "{}"
 
     main_content = "\n".join([
         '"""Entry point: `python -m <package>` builds and runs the workflow."""',
@@ -65,8 +71,8 @@ def generate_package_files(
         '    sys.stdout.reconfigure(errors="backslashreplace")',
         "",
         "workflow = build_graph()",
-        "# Example: provide input for the start node.",
-        f'initial_state: GraphState = {{"{start_func}": {{}}}}',
+        "# Example inputs, taken from the workflow's declared variables.",
+        f'initial_state: GraphState = {{"{start_func}": {start_inputs}}}',
         "result = workflow.invoke(initial_state)",
         "print(result)",
         "",
