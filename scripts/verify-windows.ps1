@@ -4,48 +4,64 @@
 
 .DESCRIPTION
     Every check here maps to a claim made in USAGE.md sections 8 (Windows) and 9
-    (Docker). They are claims that cannot be verified from macOS or Linux: the
-    console code page, PowerShell's environment-variable syntax, path separators,
-    and bind-mount behaviour on Docker Desktop for Windows.
+    (Docker) that cannot be verified from macOS or Linux: the console code page,
+    PowerShell's environment-variable syntax, path separators, and bind-mount
+    behaviour on Docker Desktop for Windows.
 
-    The script only reads and writes inside a temporary directory plus the repo's
-    own tests/fixtures; it installs nothing and changes no machine settings.
+    The script installs nothing and changes no machine settings. It writes only
+    inside a temporary directory under %TEMP%.
 
-    Prerequisite: uv on PATH. Installing uv alone is enough -- it downloads
-    CPython itself, so Python need not be installed separately, and it needs no
+    Prerequisite: uv. Installing uv alone is enough -- it downloads CPython
+    itself, so Python need not be installed separately, and it needs no
     administrator rights:
 
         powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+        $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"   # until you restart the shell
 
-    A bare `python` on PATH also works, but then the project's dependencies must
-    already be installed into it or the section C checks will be skipped.
+    A real python on PATH also works, but then the project's dependencies must
+    already be installed into it or the section C checks are skipped. Note that
+    Windows ships a stub python.exe under WindowsApps that only opens the
+    Microsoft Store; this script detects and ignores it.
 
 .PARAMETER RepoRoot
-    Path to a checkout of this repository. Defaults to the parent of this script.
+    Path to a checkout (or `git archive` export) of this repository. Defaults to
+    the parent of this script's directory.
+
+    If this resolves to a UNC path such as \\Mac\Home\... (a Parallels shared
+    folder), the script copies it to local disk first: Windows cannot give a
+    native process a UNC working directory, so uv and python would silently run
+    against C:\Windows instead. Pass -NoCopy to suppress that.
 
 .PARAMETER ExpectedDigest
-    Optional. The output digest produced on macOS/Linux (see the command printed
-    at the end of a run there). When supplied, the script asserts that Windows
-    generates byte-identical output.
+    Optional. The digest printed by `make verify-digest` on macOS/Linux. When
+    supplied, the script asserts that Windows generates byte-identical output.
 
 .PARAMETER SkipDocker
     Skip the Docker checks even if a Docker CLI is present.
 
+.PARAMETER NoCopy
+    Use RepoRoot as given, even when it is on a network share.
+
 .EXAMPLE
-    # Copy the repo to a local disk first -- running from a Parallels network
-    # share (\\Mac\Home\...) makes virtualenv creation slow and flaky.
     .\scripts\verify-windows.ps1
 
 .EXAMPLE
-    .\scripts\verify-windows.ps1 -ExpectedDigest 3f0a...  # compare against macOS
+    .\scripts\verify-windows.ps1 -ExpectedDigest 68c3dd1fab0887b4...
 #>
 [CmdletBinding()]
 param(
     [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$ExpectedDigest = "",
-    [switch]$SkipDocker
+    [switch]$SkipDocker,
+    [switch]$NoCopy
 )
 
+# "Stop" applies to cmdlets only. Every external process goes through
+# Invoke-Native, which drops to "Continue" for the duration of the call --
+# otherwise a native command merely *writing to stderr* under 2>&1 becomes a
+# terminating NativeCommandError and kills the run. That is exactly what the
+# Microsoft Store python.exe stub does, and it used to abort this script during
+# the environment report.
 $ErrorActionPreference = "Stop"
 $script:Results = @()
 
@@ -65,9 +81,47 @@ function Add-Result {
 }
 
 function Invoke-Checked {
-    <# Run a scriptblock, turn any exception into a FAIL rather than aborting. #>
+    <# Run a check body; turn any exception into a FAIL rather than aborting. #>
     param([string]$Id, [string]$Claim, [scriptblock]$Body)
     try { & $Body } catch { Add-Result $Id $Claim "FAIL" $_.Exception.Message }
+}
+
+function Invoke-Native {
+    <#
+        .SYNOPSIS
+            Run an external program, capturing output and exit code without ever
+            throwing because of stderr.
+        .OUTPUTS
+            [pscustomobject] with ExitCode and Output.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [string[]]$Arguments = @(),
+        [string]$WorkDir,
+        [hashtable]$EnvVars = @{}
+    )
+
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $saved = @{}
+    foreach ($k in $EnvVars.Keys) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k)
+        [Environment]::SetEnvironmentVariable($k, $EnvVars[$k])
+    }
+    if ($WorkDir) { Push-Location -LiteralPath $WorkDir }
+    try {
+        $lines = & $Exe @Arguments 2>&1 | ForEach-Object { $_.ToString() }
+        return [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Output   = (@($lines) -join "`n")
+        }
+    } catch {
+        return [pscustomobject]@{ ExitCode = -1; Output = $_.Exception.Message }
+    } finally {
+        if ($WorkDir) { Pop-Location }
+        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+        $ErrorActionPreference = $prevEap
+    }
 }
 
 function Get-ToolPath {
@@ -85,13 +139,54 @@ function Get-ToolPath {
     return $null
 }
 
+function Get-RealPythonPath {
+    <#
+        .SYNOPSIS
+            Path to a python that actually runs, or $null.
+        .NOTES
+            Windows puts an App Execution Alias at
+            %LOCALAPPDATA%\Microsoft\WindowsApps\python.exe. It is on PATH and
+            Get-Command finds it, but running it only prints "Python was not
+            found; run without arguments to install from the Microsoft Store"
+            and exits non-zero. Probe the candidate rather than trusting PATH.
+    #>
+    $candidate = Get-ToolPath "python"
+    if (-not $candidate) { return $null }
+    if ($candidate -like "*\WindowsApps\*") { return $null }
+    $probe = Invoke-Native -Exe $candidate -Arguments @("--version")
+    if ($probe.ExitCode -eq 0 -and $probe.Output -match "Python 3") { return $candidate }
+    return $null
+}
+
+# ---------------------------------------------------------------------------
+# Working copy: native processes cannot have a UNC current directory
+# ---------------------------------------------------------------------------
+
+# PowerShell reports a share-rooted location as
+# "Microsoft.PowerShell.Core\FileSystem::\\Mac\Home\...". Strip the provider
+# prefix so the value is a plain path.
+$RepoRoot = $RepoRoot -replace '^Microsoft\.PowerShell\.Core\\FileSystem::', ''
+
+if (-not $NoCopy -and $RepoRoot.StartsWith("\\")) {
+    $localRoot = Join-Path $env:TEMP ("d2l-repo-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    Write-Host "RepoRoot is on a network share:" -ForegroundColor Yellow
+    Write-Host "  $RepoRoot" -ForegroundColor Yellow
+    Write-Host "Windows cannot give uv.exe or python.exe a UNC working directory," -ForegroundColor Yellow
+    Write-Host "so copying to local disk first: $localRoot" -ForegroundColor Yellow
+    New-Item -ItemType Directory -Path $localRoot -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $RepoRoot "*") -Destination $localRoot -Recurse -Force
+    Remove-Item (Join-Path $localRoot ".venv") -Recurse -Force -ErrorAction SilentlyContinue
+    $RepoRoot = $localRoot
+    Write-Host "Copied.`n" -ForegroundColor Yellow
+}
+
 # ---------------------------------------------------------------------------
 # Environment report
 # ---------------------------------------------------------------------------
-Write-Host "`n=== Environment ===" -ForegroundColor Cyan
+Write-Host "=== Environment ===" -ForegroundColor Cyan
 
-$codepage = (chcp) -replace '[^0-9]', ''
-$pyExe = Get-ToolPath "python"
+$codepage = ((Invoke-Native -Exe "chcp.com").Output -replace '[^0-9]', '')
+$pyExe = Get-RealPythonPath
 $uvExe = Get-ToolPath "uv"
 
 try {
@@ -103,30 +198,35 @@ try {
     $osArch = $env:PROCESSOR_ARCHITECTURE
 }
 
+$pyVersion = "(not found)"
+if ($pyExe) { $pyVersion = (Invoke-Native -Exe $pyExe -Arguments @("--version")).Output }
+$uvVersion = "(not found)"
+if ($uvExe) { $uvVersion = (Invoke-Native -Exe $uvExe -Arguments @("--version")).Output }
+
 [pscustomobject]@{
-    PowerShell    = $PSVersionTable.PSVersion.ToString()
-    Edition       = $PSVersionTable.PSEdition
-    OS            = $osDesc
-    Architecture  = $osArch
-    ConsoleCP     = $codepage
-    OutputEncoding= [Console]::OutputEncoding.WebName
-    Culture       = (Get-Culture).Name
-    Python        = if ($pyExe) { (& python --version 2>&1) } else { "(not found)" }
-    uv            = if ($uvExe) { (& uv --version 2>&1) } else { "(not found)" }
-    PYTHONUTF8    = if ($env:PYTHONUTF8) { $env:PYTHONUTF8 } else { "(unset)" }
+    PowerShell     = $PSVersionTable.PSVersion.ToString()
+    Edition        = $PSVersionTable.PSEdition
+    OS             = $osDesc
+    Architecture   = $osArch
+    ConsoleCP      = $codepage
+    OutputEncoding = [Console]::OutputEncoding.WebName
+    Culture        = (Get-Culture).Name
+    Python         = $pyVersion
+    uv             = $uvVersion
+    RepoRoot       = $RepoRoot
+    PYTHONUTF8     = $(if ($env:PYTHONUTF8) { $env:PYTHONUTF8 } else { "(unset)" })
 } | Format-List
 
 if (-not $pyExe -and -not $uvExe) {
-    Write-Host "Neither uv nor python is on PATH." -ForegroundColor Red
+    Write-Host "Neither uv nor a working python is on PATH." -ForegroundColor Red
     Write-Host ""
-    Write-Host "Installing uv alone is enough -- it downloads CPython 3.13 itself," -ForegroundColor Yellow
-    Write-Host "needs no administrator rights, and is what the checks below prefer:" -ForegroundColor Yellow
+    Write-Host "Installing uv alone is enough -- it downloads CPython itself and" -ForegroundColor Yellow
+    Write-Host "needs no administrator rights:" -ForegroundColor Yellow
     Write-Host '  powershell -c "irm https://astral.sh/uv/install.ps1 | iex"' -ForegroundColor Cyan
-    Write-Host "Then open a new shell so PATH picks it up, and re-run this script." -ForegroundColor Yellow
+    Write-Host '  $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"' -ForegroundColor Cyan
     exit 2
 }
 
-# Prefer uv so the pinned dependency set is used; fall back to bare python.
 $useUv = [bool]$uvExe
 $fixture = Join-Path $RepoRoot "tests\fixtures\guardduty_handler.yml"
 if (-not (Test-Path $fixture)) {
@@ -135,54 +235,44 @@ if (-not (Test-Path $fixture)) {
 }
 
 function Invoke-Converter {
-    <# Run the CLI, returning a record with ExitCode/StdOut/StdErr. #>
-    param([string[]]$CliArgs, [string]$WorkDir, [hashtable]$Env = @{})
-
-    $saved = @{}
-    foreach ($k in $Env.Keys) {
-        $saved[$k] = [Environment]::GetEnvironmentVariable($k)
-        [Environment]::SetEnvironmentVariable($k, $Env[$k])
+    <# Run the CLI, through uv when available. #>
+    param([string[]]$CliArgs, [string]$WorkDir, [hashtable]$EnvVars = @{})
+    if ($useUv) {
+        return Invoke-Native -Exe $uvExe -WorkDir $WorkDir -EnvVars $EnvVars `
+            -Arguments (@("run", "--project", $RepoRoot, "dify2langgraph") + $CliArgs)
     }
-    try {
-        Push-Location $WorkDir
-        try {
-            if ($useUv) {
-                $out = & uv run --project $RepoRoot dify2langgraph @CliArgs 2>&1
-            } else {
-                $env:PYTHONPATH = Join-Path $RepoRoot "src"
-                $out = & python -m dify2langgraph.cli @CliArgs 2>&1
-            }
-            return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($out -join "`n") }
-        } finally { Pop-Location }
-    } finally {
-        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
-    }
+    $e = $EnvVars.Clone()
+    $e["PYTHONPATH"] = (Join-Path $RepoRoot "src")
+    return Invoke-Native -Exe $pyExe -WorkDir $WorkDir -EnvVars $e `
+        -Arguments (@("-m", "dify2langgraph.cli") + $CliArgs)
 }
 
 function Invoke-Python {
     <#
         .SYNOPSIS
-            Run Python, through uv when it is available.
+            Run Python, through uv when available.
         .NOTES
-            uv is the recommended (and sufficient) install on Windows: it fetches
-            CPython itself, so a bare `python` need not be on PATH at all. Calling
-            `python` directly would fail in exactly that setup.
+            uv is the recommended (and sufficient) install: it fetches CPython
+            itself, so a bare python need not be on PATH at all.
     #>
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$PyArgs)
-    if ($useUv) { return & uv run --project $RepoRoot python @PyArgs 2>&1 }
-    return & python @PyArgs 2>&1
+    param([string[]]$PyArgs, [string]$WorkDir, [hashtable]$EnvVars = @{})
+    if ($useUv) {
+        return Invoke-Native -Exe $uvExe -WorkDir $WorkDir -EnvVars $EnvVars `
+            -Arguments (@("run", "--project", $RepoRoot, "python") + $PyArgs)
+    }
+    return Invoke-Native -Exe $pyExe -WorkDir $WorkDir -EnvVars $EnvVars -Arguments $PyArgs
 }
 
-$work = Join-Path ([System.IO.Path]::GetTempPath()) ("d2l-verify-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+$work = Join-Path $env:TEMP ("d2l-verify-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Path $work -Force | Out-Null
-Copy-Item $fixture -Destination $work
+Copy-Item -LiteralPath $fixture -Destination $work
+$digestPy = Join-Path $RepoRoot "scripts\output_digest.py"
+$genRoot = Join-Path $work "out\guardduty_handler"
 
 # ---------------------------------------------------------------------------
 # B. Converter runs natively on Windows
 # ---------------------------------------------------------------------------
 Write-Host "`n=== B. Converter (native Windows) ===" -ForegroundColor Cyan
-
-$genRoot = Join-Path $work "out\guardduty_handler"
 
 Invoke-Checked "B1" "Converting a DSL with Japanese text succeeds" {
     $r = Invoke-Converter @("guardduty_handler.yml", "-o", "out", "--skip-implement") $work
@@ -195,8 +285,7 @@ Invoke-Checked "B1" "Converting a DSL with Japanese text succeeds" {
 }
 
 Invoke-Checked "B2" "Japanese survives the round trip into generated sources" {
-    $statePath = Join-Path $genRoot "state.py"
-    $text = [System.IO.File]::ReadAllText($statePath, [System.Text.Encoding]::UTF8)
+    $text = [System.IO.File]::ReadAllText((Join-Path $genRoot "state.py"), [System.Text.Encoding]::UTF8)
     if ($text -match "質問分類器" -and $text -match "知識取得") {
         Add-Result "B2" "Japanese survives the round trip into generated sources" "PASS"
     } else {
@@ -222,34 +311,26 @@ Invoke-Checked "B3" "Generated files use LF, not CRLF (cross-platform determinis
 }
 
 Invoke-Checked "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" {
-    $r1 = Invoke-Converter @("tests\fixtures\guardduty_handler.yml", "-o", "bs", "--skip-implement") $RepoRoot
-    $r2 = Invoke-Converter @("tests/fixtures/guardduty_handler.yml", "-o", "fs", "--skip-implement") $RepoRoot
-    $bs = Join-Path $RepoRoot "bs\guardduty_handler\state.py"
-    $fs = Join-Path $RepoRoot "fs\guardduty_handler\state.py"
-    $ok = ($r1.ExitCode -eq 0) -and ($r2.ExitCode -eq 0) -and (Test-Path $bs) -and (Test-Path $fs)
-    Remove-Item (Join-Path $RepoRoot "bs"), (Join-Path $RepoRoot "fs") -Recurse -Force -ErrorAction SilentlyContinue
+    $bs = Join-Path $work "bs"
+    $fs = Join-Path $work "fs"
+    $r1 = Invoke-Converter @("tests\fixtures\guardduty_handler.yml", "-o", $bs, "--skip-implement") $RepoRoot
+    $r2 = Invoke-Converter @("tests/fixtures/guardduty_handler.yml", "-o", $fs, "--skip-implement") $RepoRoot
+    $ok = ($r1.ExitCode -eq 0) -and ($r2.ExitCode -eq 0) `
+        -and (Test-Path (Join-Path $bs "guardduty_handler\state.py")) `
+        -and (Test-Path (Join-Path $fs "guardduty_handler\state.py"))
     if ($ok) {
         Add-Result "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" "PASS"
     } else {
         Add-Result "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" "FAIL" `
-            ("backslash exit={0}, slash exit={1}" -f $r1.ExitCode, $r2.ExitCode)
+            ("backslash exit={0}, slash exit={1}`n{2}" -f $r1.ExitCode, $r2.ExitCode, $r1.Output)
     }
 }
 
-# Digest: the same implementation the macOS/Linux side runs via `make verify-digest`,
-# so the two platforms cannot drift apart in how they hash the output. Stdlib only
-# in --dir mode, so it works without the package being installed.
-$digestPy = Join-Path $RepoRoot "scripts\output_digest.py"
-# Must not throw: if B1 failed there is nothing to digest, and $ErrorActionPreference
-# is "Stop", so an unguarded failure here would abort the whole script.
+# Must not throw: if B1 failed there is nothing to digest.
 $digest = "(unavailable)"
-try {
-    if (Test-Path $genRoot) {
-        $out = Invoke-Python $digestPy --dir $genRoot
-        if ($LASTEXITCODE -eq 0) { $digest = ($out | Select-Object -Last 1).ToString().Trim() }
-    }
-} catch {
-    $digest = "(unavailable: " + $_.Exception.Message + ")"
+if (Test-Path $genRoot) {
+    $dr = Invoke-Python @($digestPy, "--dir", $genRoot)
+    if ($dr.ExitCode -eq 0) { $digest = ($dr.Output -split "`n" | Select-Object -Last 1).Trim() }
 }
 
 Invoke-Checked "B5" "Output is byte-identical to the macOS/container run" {
@@ -269,30 +350,20 @@ Invoke-Checked "B5" "Output is byte-identical to the macOS/container run" {
 # ---------------------------------------------------------------------------
 Write-Host "`n=== C. Console code page (USAGE 8.1) ===" -ForegroundColor Cyan
 
-# These checks *run* a generated package, so langgraph and friends have to be
-# importable. With uv that is automatic (the repo's own environment is used);
-# with a bare system python the user would have to install the project first.
-# Detect that up front so a missing dependency reports as SKIP with a usable
-# instruction, rather than as a FAIL that looks like a product defect.
-$null = Invoke-Python -c "import langgraph"
-$runtimeDepsOk = ($LASTEXITCODE -eq 0)
-
-if (-not $runtimeDepsOk) {
-    Add-Result "C0" "Console code page checks" "SKIP" ('langgraph is not importable. ' +
-        'Install uv (it also fetches Python) and re-run, or pip install ' + $RepoRoot +
-        ' into the active interpreter.')
-}
-
+# These checks *run* a generated package, so langgraph has to be importable.
+# With uv that is automatic; with a bare python the project must be installed.
+$depProbe = Invoke-Python @("-c", "import langgraph")
+$runtimeDepsOk = ($depProbe.ExitCode -eq 0)
 $pkgParent = Join-Path $work "run"
 
-if ($runtimeDepsOk) {
-    # Give one node a Japanese return value, standing in for an implemented body,
-    # so running the package actually has non-ASCII in the state it prints.
-    # Kept inside the guard: this is top-level code, and with
-    # $ErrorActionPreference = "Stop" a missing generated file would abort the run.
+if (-not $runtimeDepsOk) {
+    Add-Result "C0" "Console code page checks" "SKIP" ("langgraph is not importable: " + $depProbe.Output)
+} else {
     try {
-        $simple = Join-Path $RepoRoot "tests\fixtures\simple_workflow.yml"
-        Copy-Item $simple -Destination $work -Force
+        # Give one node a Japanese return value, standing in for an implemented
+        # body, so running the package has non-ASCII in the state it prints.
+        Copy-Item -LiteralPath (Join-Path $RepoRoot "tests\fixtures\simple_workflow.yml") `
+            -Destination $work -Force
         $null = Invoke-Converter @("simple_workflow.yml", "-o", "run", "--skip-implement") $work
         $llmNode = Join-Path $pkgParent "simple_workflow\nodes\llm_node.py"
         $src = [System.IO.File]::ReadAllText($llmNode, [System.Text.Encoding]::UTF8)
@@ -304,71 +375,52 @@ if ($runtimeDepsOk) {
     }
 }
 
-function Invoke-Package {
-    param([hashtable]$Env)
-    $saved = @{}
-    foreach ($k in $Env.Keys) {
-        $saved[$k] = [Environment]::GetEnvironmentVariable($k)
-        [Environment]::SetEnvironmentVariable($k, $Env[$k])
+if ($runtimeDepsOk) {
+    Invoke-Checked "C1" "Without PYTHONUTF8, printing non-ASCII state does not crash" {
+        $r = Invoke-Python @("-m", "simple_workflow") $pkgParent @{ PYTHONUTF8 = $null; PYTHONIOENCODING = $null }
+        if ($r.ExitCode -eq 0 -and $r.Output -notmatch "UnicodeEncodeError") {
+            $how = if ($r.Output -match '\\u7ffb') { "escaped as \uXXXX, as documented" } else { "rendered directly" }
+            Add-Result "C1" "Without PYTHONUTF8, printing non-ASCII state does not crash" "PASS" `
+                ("code page {0}; {1}" -f $codepage, $how)
+        } else {
+            Add-Result "C1" "Without PYTHONUTF8, printing non-ASCII state does not crash" "FAIL" $r.Output
+        }
     }
-    try {
-        Push-Location $pkgParent
-        try {
-            $out = Invoke-Python -m simple_workflow
-            return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($out -join "`n") }
-        } finally { Pop-Location }
-    } finally {
-        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+
+    Invoke-Checked "C2" "With PYTHONUTF8=1, Japanese is printed correctly" {
+        $r = Invoke-Python @("-m", "simple_workflow") $pkgParent @{ PYTHONUTF8 = "1" }
+        if ($r.ExitCode -eq 0 -and $r.Output -match "翻訳結果") {
+            Add-Result "C2" "With PYTHONUTF8=1, Japanese is printed correctly" "PASS"
+        } else {
+            Add-Result "C2" "With PYTHONUTF8=1, Japanese is printed correctly" "FAIL" $r.Output
+        }
     }
 }
-
-if ($runtimeDepsOk) { Invoke-Checked "C1" "Without PYTHONUTF8, printing non-ASCII state does not crash" {
-    $r = Invoke-Package @{ PYTHONUTF8 = $null; PYTHONIOENCODING = $null }
-    if ($r.ExitCode -eq 0 -and $r.Output -notmatch "UnicodeEncodeError") {
-        $escaped = if ($r.Output -match '\\u7ffb') { " (escaped as \uXXXX, as documented)" } else { " (rendered directly)" }
-        Add-Result "C1" "Without PYTHONUTF8, printing non-ASCII state does not crash" "PASS" `
-            ("code page {0}{1}" -f $codepage, $escaped)
-    } else {
-        Add-Result "C1" "Without PYTHONUTF8, printing non-ASCII state does not crash" "FAIL" $r.Output
-    }
-} }
-
-if ($runtimeDepsOk) { Invoke-Checked "C2" "With PYTHONUTF8=1, Japanese is printed correctly" {
-    $r = Invoke-Package @{ PYTHONUTF8 = "1" }
-    if ($r.ExitCode -eq 0 -and $r.Output -match "翻訳結果") {
-        Add-Result "C2" "With PYTHONUTF8=1, Japanese is printed correctly" "PASS"
-    } else {
-        Add-Result "C2" "With PYTHONUTF8=1, Japanese is printed correctly" "FAIL" $r.Output
-    }
-} }
 
 # ---------------------------------------------------------------------------
 # D. PowerShell environment-variable syntax (USAGE 8.2)
 # ---------------------------------------------------------------------------
 Write-Host "`n=== D. PowerShell environment variables (USAGE 8.2) ===" -ForegroundColor Cyan
 
-Invoke-Checked "D1" '$env:VAR = "value" reaches the CLI (USAGE 8.2)' {
-    $r = Invoke-Converter @("guardduty_handler.yml", "-o", "dbg", "--skip-implement") $work `
-        @{ LOG_LEVEL = "DEBUG" }
-    $quiet = Invoke-Converter @("guardduty_handler.yml", "-o", "dbg2", "--skip-implement") $work `
-        @{ LOG_LEVEL = "ERROR" }
-    if ($r.Output.Length -gt $quiet.Output.Length) {
-        Add-Result "D1" '$env:VAR = "value" reaches the CLI (USAGE 8.2)' "PASS" `
-            "LOG_LEVEL honoured (DEBUG is more verbose than ERROR)"
+Invoke-Checked "D1" 'Setting $env:VAR reaches the CLI (USAGE 8.2)' {
+    $verbose = Invoke-Converter @("guardduty_handler.yml", "-o", "dbg", "--skip-implement") $work @{ LOG_LEVEL = "DEBUG" }
+    $quiet = Invoke-Converter @("guardduty_handler.yml", "-o", "dbg2", "--skip-implement") $work @{ LOG_LEVEL = "ERROR" }
+    if ($verbose.Output.Length -gt $quiet.Output.Length) {
+        Add-Result "D1" 'Setting $env:VAR reaches the CLI (USAGE 8.2)' "PASS" `
+            "LOG_LEVEL honoured (DEBUG more verbose than ERROR)"
     } else {
-        Add-Result "D1" '$env:VAR = "value" reaches the CLI (USAGE 8.2)' "FAIL" `
-            "LOG_LEVEL made no difference to output volume"
+        Add-Result "D1" 'Setting $env:VAR reaches the CLI (USAGE 8.2)' "FAIL" `
+            ("DEBUG {0} chars vs ERROR {1} chars" -f $verbose.Output.Length, $quiet.Output.Length)
     }
 }
 
-Invoke-Checked "D2" "ANSI colour codes are not emitted as literal noise" {
+Invoke-Checked "D2" "No literal ANSI escape codes in captured output" {
     $r = Invoke-Converter @("guardduty_handler.yml", "-o", "ansi", "--skip-implement") $work
-    # Output is captured (not a tty), so colour must be off regardless of terminal.
     if ($r.Output -notmatch [char]27) {
-        Add-Result "D2" "ANSI colour codes are not emitted as literal noise" "PASS"
+        Add-Result "D2" "No literal ANSI escape codes in captured output" "PASS"
     } else {
-        Add-Result "D2" "ANSI colour codes are not emitted as literal noise" "FAIL" `
-            "ESC sequences present in captured output"
+        Add-Result "D2" "No literal ANSI escape codes in captured output" "FAIL" `
+            "ESC sequences present in captured (non-tty) output"
     }
 }
 
@@ -383,43 +435,41 @@ if ($SkipDocker) {
 } elseif (-not $dockerExe) {
     Add-Result "E0" "Docker checks" "SKIP" "docker CLI not on PATH"
 } else {
-    $daemonOk = $false
-    try { $null = & docker version --format '{{.Server.Version}}' 2>&1; $daemonOk = ($LASTEXITCODE -eq 0) } catch {}
-
-    if (-not $daemonOk) {
-        Add-Result "E0" "Docker checks" "SKIP" `
-            "docker CLI present but daemon unreachable (in a Parallels VM this usually means nested virtualization is off)"
+    $probe = Invoke-Native -Exe $dockerExe -Arguments @("version", "--format", "{{.Server.Version}}")
+    if ($probe.ExitCode -ne 0) {
+        Add-Result "E0" "Docker checks" "SKIP" ("daemon unreachable. Inside a Parallels VM " +
+            "this means nested virtualization, which is a Pro/Business feature and cannot be " +
+            "enabled on the Standard edition.")
     } else {
         Invoke-Checked "E1" "The converter image builds on Windows" {
-            Push-Location $RepoRoot
-            try {
-                $null = & docker build -t dify2langgraph-verify . 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    Add-Result "E1" "The converter image builds on Windows" "PASS"
-                } else {
-                    Add-Result "E1" "The converter image builds on Windows" "FAIL" "docker build exited $LASTEXITCODE"
-                }
-            } finally { Pop-Location }
+            $r = Invoke-Native -Exe $dockerExe -WorkDir $RepoRoot `
+                -Arguments @("build", "-t", "dify2langgraph-verify", ".")
+            if ($r.ExitCode -eq 0) {
+                Add-Result "E1" "The converter image builds on Windows" "PASS"
+            } else {
+                Add-Result "E1" "The converter image builds on Windows" "FAIL" $r.Output
+            }
         }
 
         Invoke-Checked "E2" "--mount handles a Windows drive-letter source path (USAGE 9)" {
             $dockerOut = Join-Path $work "dockerout"
             New-Item -ItemType Directory -Path $dockerOut -Force | Out-Null
-            Copy-Item $fixture -Destination $dockerOut -Force
-            $out = & docker run --rm --mount "type=bind,source=$dockerOut,target=/work" `
-                dify2langgraph-verify guardduty_handler.yml -o out --skip-implement 2>&1
-            if ($LASTEXITCODE -eq 0 -and (Test-Path (Join-Path $dockerOut "out\guardduty_handler\state.py"))) {
+            Copy-Item -LiteralPath $fixture -Destination $dockerOut -Force
+            $r = Invoke-Native -Exe $dockerExe -Arguments @(
+                "run", "--rm", "--mount", "type=bind,source=$dockerOut,target=/work",
+                "dify2langgraph-verify", "guardduty_handler.yml", "-o", "out", "--skip-implement")
+            if ($r.ExitCode -eq 0 -and (Test-Path (Join-Path $dockerOut "out\guardduty_handler\state.py"))) {
                 Add-Result "E2" "--mount handles a Windows drive-letter source path (USAGE 9)" "PASS"
+                $dr = Invoke-Python @($digestPy, "--dir", (Join-Path $dockerOut "out\guardduty_handler"))
+                $d = ($dr.Output -split "`n" | Select-Object -Last 1).Trim()
+                if ($d -eq $digest) {
+                    Add-Result "E3" "Container output matches the native Windows run" "PASS" $d
+                } else {
+                    Add-Result "E3" "Container output matches the native Windows run" "FAIL" `
+                        ("native    {0}`n         container {1}" -f $digest, $d)
+                }
             } else {
-                Add-Result "E2" "--mount handles a Windows drive-letter source path (USAGE 9)" "FAIL" ($out -join "`n")
-            }
-
-            $d = (Invoke-Python $digestPy --dir (Join-Path $dockerOut "out\guardduty_handler")).Trim()
-            if ($d -eq $digest) {
-                Add-Result "E3" "Container output matches the native Windows run byte for byte" "PASS" $d
-            } else {
-                Add-Result "E3" "Container output matches the native Windows run byte for byte" "FAIL" `
-                    ("native {0}`n         container {1}" -f $digest, $d)
+                Add-Result "E2" "--mount handles a Windows drive-letter source path (USAGE 9)" "FAIL" $r.Output
             }
         }
     }
@@ -431,12 +481,12 @@ if ($SkipDocker) {
 Write-Host "`n=== Summary ===" -ForegroundColor Cyan
 $script:Results | Format-Table Id, Status, Claim -AutoSize
 
-$failed = @($script:Results | Where-Object Status -eq "FAIL")
-$skipped = @($script:Results | Where-Object Status -eq "SKIP")
-Write-Host ("{0} passed, {1} failed, {2} skipped" -f `
-    @($script:Results | Where-Object Status -eq "PASS").Count, $failed.Count, $skipped.Count)
+$passed = @($script:Results | Where-Object { $_.Status -eq "PASS" }).Count
+$failed = @($script:Results | Where-Object { $_.Status -eq "FAIL" }).Count
+$skipped = @($script:Results | Where-Object { $_.Status -eq "SKIP" }).Count
+Write-Host ("{0} passed, {1} failed, {2} skipped" -f $passed, $failed, $skipped)
 Write-Host "Output digest (this host): $digest"
 Write-Host "Compare on macOS/Linux with: make verify-digest"
 Write-Host "Temp working directory: $work"
 
-if ($failed.Count -gt 0) { exit 1 } else { exit 0 }
+if ($failed -gt 0) { exit 1 } else { exit 0 }
