@@ -82,6 +82,19 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   `anthropic>=0.75.0` は受け付ける版と受け付けない版の両方を含むため、インストール版の
   シグネチャを見て渡すか判断する形にした。検証スクリプトに `-LlmProvider` を足して
   初めて表面化した（既定の自動選択は OpenAI を優先するため anthropic に到達しない）
+- [ ] **ワークフロー入力の所在が未定義** — 生成物を `invoke()` するとき、Start ノードが
+  宣言した変数をどこに置くのかが決まっていない。`GraphState` にトップレベルのキーは無く、
+  決定論版の Stub は入力を読まずに値を捏造するため問題が表面化しない。ADR-0004 は
+  非 End ノードへの入力配線を LLM 本体生成と共に来るものとして先送りしている。
+  結果、LLM が毎回推測し、`state["query"]` と `state["start_node"]["query"]` の間で
+  実行ごとに揺れる（Windows 実機の G2 で観測。3 回中 1 回が前者）。
+  しかも**前者は成立不能**で、LangGraph は `GraphState` のスキーマに無いキーを捨てるため、
+  呼び出し側が何を渡してもそのコードは動かない（実測確認済み）。ADR-0002 に従えば
+  後者が正だが、どこにも明示されておらず `generator/engine.py` のプロンプトも指示して
+  いない。住所を決めて、プロンプトと USAGE の実行例の両方に反映する必要がある
+- [ ] `generator/engine.py` のプロンプトが ADR-0007 以前のまま — `sys.path.insert` や
+  絶対 import（`from llm import ...`）を指示しており、生成される本体が自己完結
+  パッケージの形に反する。上記の入力住所の件と同じ箇所を直すことになる
 - [ ] 依存の下限バージョンを実態に合わせる — 例 `langchain-core>=0.3.0` に対し lock は 1.6.3。
   `uv.lock` 経由なら問題ないが、lock を使わない `pip install .` では古い版が入りうる
 - [ ] 変換ツール用と生成物用の依存の分離（optional extras）— `--auto-fix` が `templates/llm.py` を
