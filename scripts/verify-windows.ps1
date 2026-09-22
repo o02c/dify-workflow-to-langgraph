@@ -46,7 +46,29 @@
     Also run the G group, which calls a real LLM and therefore costs money and
     needs network access. Off by default: every other check is deterministic,
     offline and free (ADR-0001). Credentials are read from the environment or
-    from a .env file in RepoRoot; nothing is ever printed.
+    from a .env file in RepoRoot; only their names are ever printed.
+
+.PARAMETER LlmProvider
+    Provider for the conversion-time checks (G1/G2), passed through as
+    --llm-provider. Without it the script picks the first provider it finds a
+    credential for, which is a guess: a key that exists but has no quota still
+    wins. Set this to be explicit.
+
+    Only openai, anthropic and bedrock are valid -- the converter's registry
+    (src/dify2langgraph/llm/__init__.py) has no google, even though the
+    generated llm.py does and defaults to it.
+
+.PARAMETER LlmModel
+    Model for the conversion-time checks, passed through as --llm-model.
+    Defaults to whatever the CLI defaults to.
+
+.PARAMETER RuntimeLlmProvider
+    Provider for the run-time check (G3), exported as LLM_PROVIDER for the
+    generated package. This one *does* accept google. Defaults to whatever
+    LLM_PROVIDER already says (or the generated llm.py's own default).
+
+.PARAMETER RuntimeLlmModel
+    Model for the run-time check, exported as LLM_MODEL.
 
 .EXAMPLE
     .\scripts\verify-windows.ps1
@@ -60,7 +82,11 @@ param(
     [string]$ExpectedDigest = "",
     [switch]$SkipDocker,
     [switch]$NoCopy,
-    [switch]$WithLlm
+    [switch]$WithLlm,
+    [ValidateSet("", "openai", "anthropic", "bedrock")][string]$LlmProvider = "",
+    [string]$LlmModel = "",
+    [string]$RuntimeLlmProvider = "",
+    [string]$RuntimeLlmModel = ""
 )
 
 # "Stop" applies to cmdlets only. Every external process goes through
@@ -693,9 +719,26 @@ if (-not $WithLlm) {
     # (src/dify2langgraph/llm/__init__.py); google exists solely in the generated
     # llm.py, so a Google-only setup can exercise runtime but not conversion.
     $convProvider = $null
-    if ($creds.ContainsKey("OPENAI_API_KEY")) { $convProvider = "openai" }
-    elseif ($creds.ContainsKey("ANTHROPIC_API_KEY")) { $convProvider = "anthropic" }
-    elseif ($creds.ContainsKey("AWS_PROFILE")) { $convProvider = "bedrock" }
+    $convSource = ""
+    if ($LlmProvider) {
+        $convProvider = $LlmProvider
+        $convSource = "-LlmProvider"
+    } elseif ($creds.ContainsKey("OPENAI_API_KEY")) { $convProvider = "openai"; $convSource = "auto (OPENAI_API_KEY present)" }
+    elseif ($creds.ContainsKey("ANTHROPIC_API_KEY")) { $convProvider = "anthropic"; $convSource = "auto (ANTHROPIC_API_KEY present)" }
+    elseif ($creds.ContainsKey("AWS_PROFILE")) { $convProvider = "bedrock"; $convSource = "auto (AWS_PROFILE present)" }
+
+    # Auto-detection only proves a credential exists, not that it works -- an
+    # out-of-quota key still wins the race. Say which one was chosen and why, so
+    # a 429 is obviously "wrong provider picked" rather than a mystery.
+    if ($convProvider) {
+        Write-Host ("  conversion provider: {0} [{1}]{2}" -f $convProvider, $convSource,
+            $(if ($LlmModel) { " model $LlmModel" } else { "" })) -ForegroundColor DarkGray
+    }
+    $rtProvider = if ($RuntimeLlmProvider) { $RuntimeLlmProvider }
+                  elseif ($creds.ContainsKey("LLM_PROVIDER")) { "(from LLM_PROVIDER)" }
+                  else { "(generated llm.py default)" }
+    Write-Host ("  runtime provider: {0}{1}" -f $rtProvider,
+        $(if ($RuntimeLlmModel) { " model $RuntimeLlmModel" } else { "" })) -ForegroundColor DarkGray
 
     # Conversion and the generated package both look for .env by walking up from
     # where they run, so put it beside the working directory.
@@ -710,8 +753,9 @@ if (-not $WithLlm) {
         Add-Result "G2" "An LLM-implemented workflow runs" "SKIP" "depends on G1"
     } else {
         Invoke-Checked "G1" "LLM fills node bodies at conversion time" {
-            $r = Invoke-Converter @("simple_workflow.yml", "-o", $llmDir,
-                "--llm-provider", $convProvider) $work
+            $cliArgs = @("simple_workflow.yml", "-o", $llmDir, "--llm-provider", $convProvider)
+            if ($LlmModel) { $cliArgs += @("--llm-model", $LlmModel) }
+            $r = Invoke-Converter $cliArgs $work
             $nodes = Join-Parts $llmDir "simple_workflow" "nodes"
             if ($r.ExitCode -ne 0 -or -not (Test-Path $nodes)) {
                 Add-Result "G1" "LLM fills node bodies at conversion time" "FAIL" (Get-ErrorDetail $r.Output)
@@ -787,7 +831,13 @@ if (-not $WithLlm) {
         $src = $src.Replace($stub, $body.TrimEnd())
         [System.IO.File]::WriteAllText($node, $src, (New-Object System.Text.UTF8Encoding $false))
 
-        $r = Invoke-Python @($runPy, $rtDir, "simple_workflow")
+        # Exported rather than baked into .env so the choice is visible and does
+        # not depend on what the .env happens to say.
+        $rtEnv = @{}
+        if ($RuntimeLlmProvider) { $rtEnv["LLM_PROVIDER"] = $RuntimeLlmProvider }
+        if ($RuntimeLlmModel) { $rtEnv["LLM_MODEL"] = $RuntimeLlmModel }
+
+        $r = Invoke-Python -PyArgs @($runPy, $rtDir, "simple_workflow") -EnvVars $rtEnv
         $state = Get-StateJson $r
         if (-not $state) {
             Add-Result "G3" "A generated workflow calls a real model at run time" "FAIL" (Get-ErrorDetail $r.Output)

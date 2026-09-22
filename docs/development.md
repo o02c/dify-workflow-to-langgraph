@@ -128,10 +128,21 @@ Everything except G is deterministic, offline and free -- every conversion uses
   exercises `.env` discovery from the generated package and the provider SDK
 
 G costs money and needs network access. Credentials come from the environment or
-a `.env` in `RepoRoot`; only their *names* are ever printed. Note the asymmetry:
-the converter's provider registry covers bedrock/openai/anthropic, while the
-generated `llm.py` also supports google -- so a Google-only setup can run G3 but
-not G1/G2.
+a `.env` in `RepoRoot`; only their *names* are ever printed.
+
+Pick the provider explicitly -- the fallback picks the first provider it finds a
+credential for, and a key that exists but has no quota still wins that race:
+
+```powershell
+.\scripts\verify-windows.ps1 -WithLlm `
+    -LlmProvider anthropic -LlmModel claude-sonnet-4-6 `
+    -RuntimeLlmProvider google -RuntimeLlmModel gemini-2.5-flash
+```
+
+The two pairs are separate because the two surfaces support different providers:
+the converter's registry covers bedrock/openai/anthropic, while the generated
+`llm.py` also supports google and defaults to it. A Google-only setup can
+therefore run G3 but not G1/G2, and `-LlmProvider google` is rejected up front.
 
 The script can be dry-run on macOS/Linux with PowerShell installed
 (`brew install powershell`), which exercises its whole control flow before it is
