@@ -14,6 +14,7 @@ way to inspect a generated package by hand.
 
     python scripts/run_generated.py <parent_dir> <package_name>
     python scripts/run_generated.py out wf --initial '{"start_node": {}}'
+    python scripts/run_generated.py out wf --initial-file state.json
 
 Output is ASCII-only JSON (``ensure_ascii=True``) so it survives any console code
 page, which matters on Windows where stdout defaults to the OEM code page.
@@ -70,12 +71,22 @@ def main() -> int:
         default="{}",
         help='Initial state as JSON (default: {}). Example: \'{"start_node": {}}\'',
     )
+    parser.add_argument(
+        "--initial-file",
+        type=Path,
+        help="Read the initial state from a JSON file instead. Preferred from "
+             "PowerShell, whose native-argument quoting mangles inline JSON.",
+    )
     args = parser.parse_args()
 
+    raw = args.initial
+    if args.initial_file:
+        raw = args.initial_file.read_text(encoding="utf-8")
+
     try:
-        initial = json.loads(args.initial)
+        initial = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"--initial is not valid JSON: {exc}") from exc
+        raise SystemExit(f"initial state is not valid JSON: {exc}") from exc
 
     state = run_package(args.parent_dir, args.package, initial)
 

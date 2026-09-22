@@ -166,13 +166,14 @@ def main() -> int:
         "--llm-provider",
         type=str,
         default="openai",
-        help="LLM provider for node naming (default: openai)",
+        help="LLM provider for the LLM passes: openai, anthropic, bedrock, google (default: openai)",
     )
     arg_parser.add_argument(
         "--llm-model",
         type=str,
-        default="gpt-4o-mini",
-        help="LLM model for node naming (default: gpt-4o-mini)",
+        default=None,
+        help="LLM model for the LLM passes (default: the chosen provider's own, "
+             "e.g. gpt-4o-mini for openai, gemini-2.5-flash for google)",
     )
     arg_parser.add_argument(
         "--aws-region",
@@ -209,6 +210,13 @@ def main() -> int:
     )
 
     args = arg_parser.parse_args()
+
+    # Model names are provider-specific, so an unset --llm-model has to follow
+    # --llm-provider rather than fall back to a single hard-coded value.
+    if args.llm_model is None:
+        from dify2langgraph.llm import default_model
+
+        args.llm_model = default_model(args.llm_provider)
 
     if not args.input.exists():
         logger.error("Input file not found: %s", args.input)

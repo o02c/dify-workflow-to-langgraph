@@ -424,6 +424,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "boto3" },
+    { name = "google-genai" },
     { name = "langchain-anthropic" },
     { name = "langchain-aws" },
     { name = "langchain-core" },
@@ -455,6 +456,7 @@ test = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.75.0" },
     { name = "boto3", specifier = ">=1.42.0" },
+    { name = "google-genai", specifier = ">=1.0.0" },
     { name = "langchain-anthropic", specifier = ">=0.3.0" },
     { name = "langchain-aws", specifier = ">=1.2.0" },
     { name = "langchain-core", specifier = ">=0.3.0" },

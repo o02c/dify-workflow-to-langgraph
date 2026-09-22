@@ -54,9 +54,8 @@
     credential for, which is a guess: a key that exists but has no quota still
     wins. Set this to be explicit.
 
-    Only openai, anthropic and bedrock are valid -- the converter's registry
-    (src/dify2langgraph/llm/__init__.py) has no google, even though the
-    generated llm.py does and defaults to it.
+    Valid values are openai, anthropic, bedrock and google -- the same set the
+    generated llm.py supports.
 
 .PARAMETER LlmModel
     Model for the conversion-time checks, passed through as --llm-model.
@@ -64,8 +63,9 @@
 
 .PARAMETER RuntimeLlmProvider
     Provider for the run-time check (G3), exported as LLM_PROVIDER for the
-    generated package. This one *does* accept google. Defaults to whatever
-    LLM_PROVIDER already says (or the generated llm.py's own default).
+    generated package. Kept separate from -LlmProvider because the two choices
+    are independent. Defaults to whatever LLM_PROVIDER already says (or the
+    generated llm.py's own default).
 
 .PARAMETER RuntimeLlmModel
     Model for the run-time check, exported as LLM_MODEL.
@@ -83,7 +83,7 @@ param(
     [switch]$SkipDocker,
     [switch]$NoCopy,
     [switch]$WithLlm,
-    [ValidateSet("", "openai", "anthropic", "bedrock")][string]$LlmProvider = "",
+    [ValidateSet("", "openai", "anthropic", "bedrock", "google")][string]$LlmProvider = "",
     [string]$LlmModel = "",
     [string]$RuntimeLlmProvider = "",
     [string]$RuntimeLlmModel = ""
@@ -756,9 +756,9 @@ if (-not $WithLlm) {
     Write-Host ("  credentials visible: " +
         $(if ($creds.Count) { ($creds.Keys | Sort-Object) -join ", " } else { "(none)" })) -ForegroundColor DarkGray
 
-    # The converter's own provider registry covers bedrock/openai/anthropic only
-    # (src/dify2langgraph/llm/__init__.py); google exists solely in the generated
-    # llm.py, so a Google-only setup can exercise runtime but not conversion.
+    # Both surfaces now cover the same four providers; the conversion-time and
+    # run-time choices stay separate only because they are genuinely independent
+    # (you may want a cheap model to write code and a different one to run it).
     $convProvider = $null
     $convSource = ""
     if ($LlmProvider) {
@@ -767,6 +767,7 @@ if (-not $WithLlm) {
     } elseif ($creds.ContainsKey("OPENAI_API_KEY")) { $convProvider = "openai"; $convSource = "auto (OPENAI_API_KEY present)" }
     elseif ($creds.ContainsKey("ANTHROPIC_API_KEY")) { $convProvider = "anthropic"; $convSource = "auto (ANTHROPIC_API_KEY present)" }
     elseif ($creds.ContainsKey("AWS_PROFILE")) { $convProvider = "bedrock"; $convSource = "auto (AWS_PROFILE present)" }
+    elseif ($creds.ContainsKey("GOOGLE_API_KEY")) { $convProvider = "google"; $convSource = "auto (GOOGLE_API_KEY present)" }
 
     # Auto-detection only proves a credential exists, not that it works -- an
     # out-of-quota key still wins the race. Say which one was chosen and why, so
@@ -790,7 +791,7 @@ if (-not $WithLlm) {
 
     if (-not $convProvider) {
         Add-Result "G1" "LLM fills node bodies at conversion time" "SKIP" `
-            "no openai/anthropic/bedrock credential; the converter does not support google"
+            "no LLM credential found (looked for OPENAI_API_KEY, ANTHROPIC_API_KEY, AWS_PROFILE, GOOGLE_API_KEY)"
         Add-Result "G2" "An LLM-implemented workflow runs" "SKIP" "depends on G1"
     } else {
         Invoke-Checked "G1" "LLM fills node bodies at conversion time" {
@@ -810,7 +811,11 @@ if (-not $WithLlm) {
             $crlf = @($files | Where-Object {
                 [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::UTF8) -match "`r`n"
             })
-            $compile = Invoke-Python @("-m", "py_compile") + @($files | ForEach-Object { $_.FullName })
+            # Build the array first. In argument position PowerShell does not
+            # evaluate `a + b` as an expression -- it would pass "+" as the second
+            # positional argument and the file list as the third.
+            $compileArgs = @("-m", "py_compile") + @($files | ForEach-Object { $_.FullName })
+            $compile = Invoke-Python $compileArgs
             if ($stillStubbed.Count -eq 0 -and $crlf.Count -eq 0 -and $compile.ExitCode -eq 0) {
                 $script:G1Succeeded = $true
                 Add-Result "G1" "LLM fills node bodies at conversion time" "PASS" `
@@ -829,13 +834,25 @@ if (-not $WithLlm) {
                 Add-Result "G2" "An LLM-implemented workflow runs" "SKIP" "G1 did not implement the nodes"
                 return
             }
-            $r = Invoke-Python @($runPy, $llmDir, "simple_workflow")
+
+            # A stub Start Node returns a placeholder, but an implemented one
+            # reads its declared variables and raises when they are absent -- so
+            # this needs real input, unlike F1. Passed as a file because inline
+            # JSON does not survive PowerShell's native-argument quoting.
+            $initialFile = Join-Path $work "initial.json"
+            [System.IO.File]::WriteAllText($initialFile,
+                '{"start_node": {"query": "hello"}}', (New-Object System.Text.UTF8Encoding $false))
+
+            $r = Invoke-Python @($runPy, $llmDir, "simple_workflow", "--initial-file", $initialFile)
             $state = Get-StateJson $r
             if ($state) {
                 Add-Result "G2" "An LLM-implemented workflow runs" "PASS" `
                     ("final state keys: " + (@($state.PSObject.Properties.Name) -join ", "))
             } else {
-                Add-Result "G2" "An LLM-implemented workflow runs" "FAIL" $r.Output
+                # LLM output is not deterministic; a body that does not run is a
+                # real result about the opt-in pass (ADR-0001), not a harness bug.
+                Add-Result "G2" "An LLM-implemented workflow runs" "FAIL" `
+                    ("the LLM-written body failed at run time:`n" + (Get-ErrorDetail $r.Output))
             }
         }
     }

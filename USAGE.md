@@ -78,8 +78,8 @@ dify2langgraph workflow.yml -o output/ --skip-implement
 | `-o`, `--output` | `outputs` | 出力ディレクトリ |
 | `--skip-implement` | off | **LLM によるノード本体実装をスキップ**（決定論的なテンプレート/Stub のみ出力） |
 | `--name-nodes` | off | LLM でノード名を意味的な snake_case に生成（日本語タイトル対応） |
-| `--llm-provider` | `openai` | 生成補助に使う LLM プロバイダ（`openai` / `anthropic` / `bedrock`） |
-| `--llm-model` | `gpt-4o-mini` | 生成補助に使う LLM モデル |
+| `--llm-provider` | `openai` | 生成補助に使う LLM プロバイダ（`openai` / `anthropic` / `bedrock` / `google`） |
+| `--llm-model` | プロバイダ既定 | 生成補助に使う LLM モデル。未指定ならプロバイダごとの既定（`openai` なら `gpt-4o-mini`、`google` なら `gemini-2.5-flash`） |
 | `--aws-region` | （未指定） | `--llm-provider bedrock` のリージョン。未指定なら `AWS_REGION` / `AWS_DEFAULT_REGION` → プロファイルの `region` の順に解決 |
 | `--aws-profile` | （未指定） | `--llm-provider bedrock` の AWS プロファイル。静的な資格情報を環境変数で渡す場合は**指定しない** |
 | `--lint` | off | 生成コードに linter（ruff）を実行 |
@@ -159,12 +159,15 @@ python -m workflow
 ## 6. 生成に LLM を使う場合の設定
 
 `--name-nodes` やノード本体実装（既定 ON）を使うと、変換時に LLM を呼びます。
-プロバイダは `--llm-provider` / `--llm-model` で選び、認証情報は環境変数で渡します。
+プロバイダは `--llm-provider` で選び、認証情報は環境変数で渡します。`--llm-model` を
+省略すると、そのプロバイダの既定モデルが使われます（プロバイダごとにモデル名の体系が
+違うため、単一の既定値は成立しません）。
 
 | プロバイダ | 認証 |
 |-----------|------|
 | OpenAI | `OPENAI_API_KEY` |
 | Anthropic | `ANTHROPIC_API_KEY` |
+| Google | `GOOGLE_API_KEY`（`GEMINI_API_KEY` も可） |
 | Bedrock | AWS 標準認証（region の指定は必須。[9.5](#95-bedrock-を使う) 参照） |
 
 ```bash

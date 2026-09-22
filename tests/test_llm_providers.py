@@ -10,9 +10,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from dify2langgraph.cli import _credential_hint, _provider_kwargs
-from dify2langgraph.llm import LLMConfig, Message
+from dify2langgraph.llm import LLMConfig, Message, available_providers, default_model
 from dify2langgraph.llm.anthropic import AnthropicProvider
 from dify2langgraph.llm.bedrock import BedrockProvider
+from dify2langgraph.llm.google import GoogleProvider
 
 CONFIG = LLMConfig(model="anthropic.claude-3-5-haiku-20241022-v1:0")
 
@@ -213,6 +214,74 @@ class TestAnthropicTemperature:
 
         assert "temperature" not in kwargs
         assert kwargs["model"] == "claude-x"
+
+
+class TestDefaultModel:
+    """An unset --llm-model has to follow --llm-provider."""
+
+    def test_every_registered_provider_has_a_default(self):
+        """Otherwise --llm-provider <x> alone fails with a confusing 404."""
+        missing = [p for p in available_providers() if default_model(p) is None]
+
+        assert missing == []
+
+    def test_defaults_are_provider_shaped(self):
+        """A single shared default would send gpt-4o-mini to Gemini."""
+        assert default_model("openai").startswith("gpt-")
+        assert default_model("google").startswith("gemini-")
+        assert "claude" in default_model("anthropic")
+        assert default_model("bedrock").startswith("anthropic.")
+
+    def test_unknown_provider_has_no_default(self):
+        """Resolution stays None so the provider lookup reports the real error."""
+        assert default_model("nope") is None
+
+
+class TestGoogleProvider:
+    """Gemini needs the system prompt and roles reshaped, not just passed through."""
+
+    def _generate(self, monkeypatch, messages: list[Message]):
+        """Run generate() against a mocked client and return the SDK call kwargs."""
+        monkeypatch.setenv("GOOGLE_API_KEY", "k")
+        with patch("dify2langgraph.llm.google.genai.Client"):
+            provider = GoogleProvider(LLMConfig(model="gemini-x", temperature=0.5))
+
+        response = MagicMock()
+        response.text = "hello"
+        response.usage_metadata.prompt_token_count = 3
+        response.usage_metadata.candidates_token_count = 4
+        provider.client = MagicMock()
+        provider.client.models.generate_content.return_value = response
+
+        result = provider.generate(messages)
+        return provider.client.models.generate_content.call_args.kwargs, result
+
+    def test_system_message_becomes_system_instruction(self, monkeypatch):
+        """Gemini takes the system prompt as config, not as a message."""
+        kwargs, _ = self._generate(
+            monkeypatch,
+            [Message(role="system", content="be terse"), Message(role="user", content="hi")],
+        )
+
+        assert kwargs["config"].system_instruction == "be terse"
+        assert len(kwargs["contents"]) == 1
+        assert kwargs["contents"][0].role == "user"
+
+    def test_assistant_role_is_renamed_to_model(self, monkeypatch):
+        """The API knows "user" and "model"; "assistant" would be rejected."""
+        kwargs, _ = self._generate(
+            monkeypatch,
+            [Message(role="user", content="hi"), Message(role="assistant", content="yo")],
+        )
+
+        assert [c.role for c in kwargs["contents"]] == ["user", "model"]
+
+    def test_response_and_usage_are_mapped(self, monkeypatch):
+        """Token counts land under the same keys the other providers use."""
+        _, result = self._generate(monkeypatch, [Message(role="user", content="hi")])
+
+        assert result.content == "hello"
+        assert result.usage == {"input_tokens": 3, "output_tokens": 4}
 
 
 class TestDotenvDiscovery:

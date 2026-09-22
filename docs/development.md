@@ -139,10 +139,9 @@ credential for, and a key that exists but has no quota still wins that race:
     -RuntimeLlmProvider google -RuntimeLlmModel gemini-2.5-flash
 ```
 
-The two pairs are separate because the two surfaces support different providers:
-the converter's registry covers bedrock/openai/anthropic, while the generated
-`llm.py` also supports google and defaults to it. A Google-only setup can
-therefore run G3 but not G1/G2, and `-LlmProvider google` is rejected up front.
+The two pairs are separate because the choices are independent -- a cheap model
+can write the node bodies while a different one runs them. Both surfaces support
+the same four providers (openai, anthropic, bedrock, google).
 
 The script can be dry-run on macOS/Linux with PowerShell installed
 (`brew install powershell`), which exercises its whole control flow before it is

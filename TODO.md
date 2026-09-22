@@ -73,12 +73,9 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
     Windows は WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は
     Parallels Desktop の Pro / Business 版専用で、Standard 版では有効化できない。
     実施するには Parallels のエディション変更か、別の Windows 実機が要る
-- [ ] **変換時のプロバイダに google が無い** — `llm/__init__.py` の登録は
-  bedrock / openai / anthropic のみ。一方 `templates/llm.py`（生成物の実行時）は
-  google を含む 4 つに対応しており、しかも実行時の既定が google。Google の API キー
-  しか持たない利用者は、生成物は動かせるのに `--name-nodes` やノード本体実装を
-  一切使えない（`Unknown provider 'google'`）。変換時プロバイダは langchain ではなく
-  生の SDK を使う作りなので、追加するなら `llm/google.py` を書くことになる
+- [x] **変換時のプロバイダに google が無い** — `llm/google.py` を追加して解消。
+  あわせて `--llm-model` の既定をプロバイダ追随にした（`gpt-4o-mini` 固定だったため
+  `--llm-provider google` は 404、`anthropic` も同様に失敗していた）
 - [x] **`--llm-provider anthropic` が SDK 非互換で常に失敗していた** — anthropic 1.x が
   `messages.create()` から `temperature` を削除したのに渡し続けており、
   `unexpected keyword argument 'temperature'` で全呼び出しが落ちていた。宣言下限
