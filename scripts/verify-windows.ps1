@@ -65,6 +65,12 @@ param(
 $ErrorActionPreference = "Stop"
 $script:Results = @()
 
+# Stamped by `git archive` via the export-subst attribute (.gitattributes). In a
+# working checkout it stays the literal placeholder. Printed in the environment
+# report so an out-of-date export is visible immediately -- running an old copy
+# looks exactly like a behaviour difference on the Windows host otherwise.
+$script:SourceCommit = '$Format:%H$'
+
 function Add-Result {
     param(
         [string]$Id,
@@ -277,6 +283,13 @@ if ($uvExe) { $uvVersion = (Invoke-Native -Exe $uvExe -Arguments @("--version"))
     uv             = $uvVersion
     RepoRoot       = $RepoRoot
     PYTHONUTF8     = $(if ($env:PYTHONUTF8) { $env:PYTHONUTF8 } else { "(unset)" })
+    ScriptCommit   = $(
+        if ($script:SourceCommit -like '$Format:*') {
+            "(working checkout, not a git archive export)"
+        } else {
+            $script:SourceCommit.Substring(0, [Math]::Min(12, $script:SourceCommit.Length))
+        }
+    )
 } | Format-List
 
 if (-not $pyExe -and -not $uvExe) {

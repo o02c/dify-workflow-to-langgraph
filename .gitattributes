@@ -1,0 +1,5 @@
+# `git archive` substitutes $Format:...$ placeholders in files marked export-subst.
+# The Windows verification script stamps the commit it was exported from and
+# prints it, so a stale archive is obvious in the first few lines of output
+# instead of being mistaken for a behaviour difference on the Windows host.
+scripts/verify-windows.ps1 export-subst
