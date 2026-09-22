@@ -48,8 +48,17 @@ def digest_dir(root: Path) -> str:
     if not root.is_dir():
         raise SystemExit(f"not a directory: {root}")
 
+    # Skip bytecode: importing or py_compile-ing a generated package drops
+    # __pycache__ into it, which would otherwise change the digest depending on
+    # whether the package had been run yet.
     files = sorted(
-        (p for p in root.rglob("*") if p.is_file()),
+        (
+            p
+            for p in root.rglob("*")
+            if p.is_file()
+            and p.suffix != ".pyc"
+            and "__pycache__" not in p.relative_to(root).parts
+        ),
         key=lambda p: p.relative_to(root).as_posix(),
     )
     if not files:

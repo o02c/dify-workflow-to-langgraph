@@ -5,7 +5,6 @@ This module provides the command-line interface for the converter.
 
 import argparse
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -74,7 +73,14 @@ def copy_templates(output_dir: Path) -> None:
         if template_file.name.startswith("__"):
             continue
         dest = output_dir / template_file.name
-        shutil.copy(template_file, dest)
+        # Re-write rather than shutil.copy: a byte copy would carry CRLF into the
+        # output if the checkout has it (Git for Windows does this by default),
+        # and the generated package must be byte-identical everywhere (ADR-0001).
+        # .gitattributes also pins these to LF; this makes the output correct even
+        # when the templates arrive from somewhere else.
+        dest.write_text(
+            template_file.read_text(encoding="utf-8"), encoding="utf-8", newline="\n"
+        )
         logger.info("Copied: %s", dest)
 
 
@@ -166,6 +172,7 @@ def main() -> int:
         "--llm-provider",
         type=str,
         default="openai",
+        choices=["openai", "anthropic", "bedrock", "google"],
         help="LLM provider for the LLM passes: openai, anthropic, bedrock, google (default: openai)",
     )
     arg_parser.add_argument(

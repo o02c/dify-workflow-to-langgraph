@@ -68,10 +68,20 @@ def _load_providers() -> None:
 # default. Without this, `--llm-provider google` inherits the OpenAI default and
 # fails with "models/gpt-4o-mini is not found", which reads like a broken
 # provider rather than a missing --llm-model.
+# Model ids go stale: the 3.5 generation reached end of life and stopped being
+# servable, so a default naming it fails with a 404 that looks like a broken
+# provider. Re-check these when bumping SDKs.
+#
+# Bedrock is the awkward one. This project talks to `bedrock-runtime`, where the
+# bare `anthropic.` id is not accepted for on-demand throughput -- it needs a geo
+# (`us.`/`eu.`/`au.`/`jp.`) or global inference profile. `global.` is used here
+# because it is the only one that works from every region, which is what a
+# default has to do; it can route outside the source region, so anyone with data
+# residency requirements should pass a geo profile via --llm-model.
 _DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-4o-mini",
-    "anthropic": "claude-3-5-haiku-20241022",
-    "bedrock": "anthropic.claude-3-5-haiku-20241022-v1:0",
+    "anthropic": "claude-haiku-4-5-20251001",
+    "bedrock": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
     "google": "gemini-2.5-flash",
 }
 

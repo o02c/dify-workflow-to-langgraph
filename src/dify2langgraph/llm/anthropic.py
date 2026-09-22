@@ -31,10 +31,9 @@ class AnthropicProvider(LLMProvider):
     Supports Claude models via Anthropic API directly.
 
     Example models:
-    - claude-sonnet-4-20250514
-    - claude-opus-4-20250514
-    - claude-3-5-sonnet-20241022
-    - claude-3-5-haiku-20241022
+    - claude-haiku-4-5-20251001
+    - claude-sonnet-5
+    - claude-opus-5
     """
 
     def __init__(
@@ -86,15 +85,23 @@ class AnthropicProvider(LLMProvider):
             "model": self.config.model,
             "messages": conversation,
             "max_tokens": self.config.max_tokens,
-            **self.config.extra,
         }
 
         if "temperature" in _CREATE_PARAMS:
             kwargs["temperature"] = self.config.temperature
-        else:
+
+        # extra is merged last so an explicit override still wins, then filtered:
+        # otherwise extra["temperature"] would sail past the guard above and hit
+        # the SDK anyway, which is the exact TypeError this detection exists for.
+        kwargs.update(self.config.extra)
+        dropped = [k for k in ("temperature", "top_p") if k in kwargs and k not in _CREATE_PARAMS]
+        for key in dropped:
+            del kwargs[key]
+        if dropped:
             logger.debug(
-                "anthropic %s does not accept temperature; sending without it",
+                "anthropic %s does not accept %s; sending without it",
                 anthropic.__version__,
+                ", ".join(dropped),
             )
 
         if system_content:

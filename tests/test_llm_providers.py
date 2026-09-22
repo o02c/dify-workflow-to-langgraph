@@ -202,6 +202,63 @@ class TestAnthropicTemperature:
         provider.generate([Message(role="user", content="hi")])
         return provider.client.messages.create.call_args.kwargs
 
+    def test_detection_sees_a_real_signature(self):
+        """Guards the probe, not just the branch.
+
+        Both branch tests monkeypatch _CREATE_PARAMS. If inspect.signature ever
+        degraded to (*args, **kwargs) -- a decorator without functools.wraps --
+        the set would silently become {"args", "kwargs"}, temperature would be
+        dropped forever, and nothing else here would notice.
+        """
+        from dify2langgraph.llm.anthropic import _CREATE_PARAMS
+
+        assert "max_tokens" in _CREATE_PARAMS
+        assert "messages" in _CREATE_PARAMS
+
+    def test_extra_cannot_bypass_the_guard(self, monkeypatch):
+        """config.extra is merged too, so it has to be filtered as well."""
+        monkeypatch.setattr(
+            "dify2langgraph.llm.anthropic._CREATE_PARAMS",
+            frozenset({"model", "messages", "max_tokens"}),
+        )
+        provider = AnthropicProvider(
+            LLMConfig(model="claude-x", extra={"temperature": 0.9, "top_p": 0.1}),
+            api_key="k",
+        )
+        response = MagicMock()
+        response.content = []
+        response.usage.input_tokens = 1
+        response.usage.output_tokens = 2
+        provider.client = MagicMock()
+        provider.client.messages.create.return_value = response
+
+        provider.generate([Message(role="user", content="hi")])
+        kwargs = provider.client.messages.create.call_args.kwargs
+
+        assert "temperature" not in kwargs
+        assert "top_p" not in kwargs
+
+    def test_extra_still_overrides_on_a_supporting_sdk(self, monkeypatch):
+        """Filtering must not cost extra its precedence where it is valid."""
+        monkeypatch.setattr(
+            "dify2langgraph.llm.anthropic._CREATE_PARAMS",
+            frozenset({"model", "messages", "max_tokens", "temperature"}),
+        )
+        provider = AnthropicProvider(
+            LLMConfig(model="claude-x", temperature=0.1, extra={"temperature": 0.9}),
+            api_key="k",
+        )
+        response = MagicMock()
+        response.content = []
+        response.usage.input_tokens = 1
+        response.usage.output_tokens = 2
+        provider.client = MagicMock()
+        provider.client.messages.create.return_value = response
+
+        provider.generate([Message(role="user", content="hi")])
+
+        assert provider.client.messages.create.call_args.kwargs["temperature"] == 0.9
+
     def test_temperature_sent_when_the_sdk_accepts_it(self, monkeypatch):
         """Older SDKs still get the configured sampling temperature."""
         kwargs = self._capture_kwargs(monkeypatch, {"model", "messages", "max_tokens", "temperature"})
@@ -225,12 +282,25 @@ class TestDefaultModel:
 
         assert missing == []
 
-    def test_defaults_are_provider_shaped(self):
-        """A single shared default would send gpt-4o-mini to Gemini."""
-        assert default_model("openai").startswith("gpt-")
-        assert default_model("google").startswith("gemini-")
-        assert "claude" in default_model("anthropic")
-        assert default_model("bedrock").startswith("anthropic.")
+    def test_defaults_are_pinned_exactly(self):
+        """Pinned, not shape-matched.
+
+        A "looks like a claude id" assertion happily accepts a retired model, and
+        a default naming a retired model fails with a 404 that reads like a broken
+        provider. Spelling them out means replacing one is a deliberate edit.
+        """
+        assert default_model("openai") == "gpt-4o-mini"
+        assert default_model("google") == "gemini-2.5-flash"
+        assert default_model("anthropic") == "claude-haiku-4-5-20251001"
+        assert default_model("bedrock") == "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    def test_bedrock_default_is_an_inference_profile(self):
+        """bedrock-runtime rejects the bare `anthropic.` id for on-demand use.
+
+        It needs a geo (us./eu./au./jp.) or global inference profile, so a default
+        in the bare form would fail for every caller.
+        """
+        assert default_model("bedrock").split(".")[0] in {"global", "us", "eu", "au", "jp"}
 
     def test_unknown_provider_has_no_default(self):
         """Resolution stays None so the provider lookup reports the real error."""

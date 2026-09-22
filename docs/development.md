@@ -102,8 +102,8 @@ native process a UNC working directory, so `uv.exe` would otherwise run against
 `C:\Windows`. Pass `-NoCopy` to override.
 
 The checks are grouped: **B** the converter runs, **C** console code page,
-**D** PowerShell environment variables, **E** Docker, **F** generated workflows
-actually execute, **G** real LLM calls (opt-in via `-WithLlm`). F is the one that matters to a customer -- it runs a generated
+**D** PowerShell environment variables, **F** generated workflows actually
+execute, **G** real LLM calls (opt-in via `-WithLlm`), and **E** Docker last. F is the one that matters to a customer -- it runs a generated
 package through `scripts/run_generated.py`, which prints the final GraphState as
 ASCII-only JSON, and asserts the graph really executed: every node visited, the
 End Node forwarding an upstream value (ADR-0004), a Branching Node resolving to
@@ -164,7 +164,6 @@ rediscovered:
   script as the system ANSI code page, not UTF-8. This script contains Japanese
   string literals, so without the BOM they arrive as mojibake on an English
   Windows host and the comparisons fail for reasons that look like product bugs.
-
 
 - **The Microsoft Store `python.exe` stub.** Windows puts an App Execution Alias
   on PATH under `WindowsApps`. `Get-Command python` finds it, but running it just

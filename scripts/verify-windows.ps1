@@ -366,7 +366,8 @@ if (-not $pyExe -and -not $uvExe) {
 $useUv = [bool]$uvExe
 $onWindows = ($PSVersionTable.PSEdition -eq "Desktop") -or ($IsWindows -eq $true)
 $fixture = Join-Parts $RepoRoot "tests" "fixtures" "guardduty_handler.yml"
-if (-not (Test-Path $fixture)) {
+$simpleFixture = Join-Parts $RepoRoot "tests" "fixtures" "simple_workflow.yml"
+if (-not (Test-Path $fixture) -or -not (Test-Path $simpleFixture)) {
     Write-Host "Fixture not found: $fixture" -ForegroundColor Red
     Write-Host ""
     Write-Host "RepoRoot contains:" -ForegroundColor Yellow
@@ -437,8 +438,7 @@ Write-Host ("Ready: " + $preflight.Output.Trim()) -ForegroundColor DarkGray
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("d2l-verify-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 Copy-Item -LiteralPath $fixture -Destination $work
-Copy-Item -LiteralPath (Join-Parts $RepoRoot "tests" "fixtures" "simple_workflow.yml") `
-    -Destination $work -Force
+Copy-Item -LiteralPath $simpleFixture -Destination $work -Force
 $digestPy = Join-Parts $RepoRoot "scripts" "output_digest.py"
 $genRoot = Join-Parts $work "out" "guardduty_handler"
 
@@ -726,7 +726,7 @@ function Get-LlmCredentialSources {
             into the result, so nothing secret can reach the console.
     #>
     $wanted = @("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
-                "AWS_PROFILE", "LLM_PROVIDER", "LLM_MODEL")
+                "GEMINI_API_KEY", "AWS_PROFILE", "LLM_PROVIDER", "LLM_MODEL")
     $found = @{}
     foreach ($name in $wanted) {
         if ([Environment]::GetEnvironmentVariable($name)) { $found[$name] = "env" }
@@ -768,6 +768,7 @@ if (-not $WithLlm) {
     elseif ($creds.ContainsKey("ANTHROPIC_API_KEY")) { $convProvider = "anthropic"; $convSource = "auto (ANTHROPIC_API_KEY present)" }
     elseif ($creds.ContainsKey("AWS_PROFILE")) { $convProvider = "bedrock"; $convSource = "auto (AWS_PROFILE present)" }
     elseif ($creds.ContainsKey("GOOGLE_API_KEY")) { $convProvider = "google"; $convSource = "auto (GOOGLE_API_KEY present)" }
+    elseif ($creds.ContainsKey("GEMINI_API_KEY")) { $convProvider = "google"; $convSource = "auto (GEMINI_API_KEY present)" }
 
     # Auto-detection only proves a credential exists, not that it works -- an
     # out-of-quota key still wins the race. Say which one was chosen and why, so
@@ -791,7 +792,7 @@ if (-not $WithLlm) {
 
     if (-not $convProvider) {
         Add-Result "G1" "LLM fills node bodies at conversion time" "SKIP" `
-            "no LLM credential found (looked for OPENAI_API_KEY, ANTHROPIC_API_KEY, AWS_PROFILE, GOOGLE_API_KEY)"
+            "no LLM credential found (looked for OPENAI_API_KEY, ANTHROPIC_API_KEY, AWS_PROFILE, GOOGLE_API_KEY, GEMINI_API_KEY)"
         Add-Result "G2" "An LLM-implemented workflow runs" "SKIP" "depends on G1"
     } else {
         Invoke-Checked "G1" "LLM fills node bodies at conversion time" {
@@ -975,7 +976,10 @@ if ($SkipDocker) {
                         ("native    {0}`n         container {1}" -f $digest, $d)
                 }
             } else {
-                Add-Result "E2" "--mount handles a Windows drive-letter source path (USAGE 9)" "FAIL" $r.Output
+                Add-Result "E2" "--mount handles a Windows drive-letter source path (USAGE 9)" "FAIL" (Get-ErrorDetail $r.Output)
+                # Emit the row anyway; a check that silently disappears from the
+                # summary reads as "not implemented" rather than "blocked".
+                Add-Result "E3" "Container output matches the native Windows run" "SKIP" "E2 did not produce output"
             }
         }
     }
@@ -1004,5 +1008,9 @@ Write-Host ("{0} passed, {1} failed, {2} skipped" -f $passed, $failed, $skipped)
 Write-Host "Output digest (this host): $digest"
 Write-Host "Compare on macOS/Linux with: make verify-digest"
 Write-Host "Temp working directory: $work"
+if ($WithLlm -and (Test-Path (Join-Path $work ".env"))) {
+    # Left in place so a failure can be investigated, but it holds real keys.
+    Write-Host "Note: a copy of your .env is in that directory and in $RepoRoot -- delete them when done." -ForegroundColor Yellow
+}
 
 if ($failed -gt 0) { exit 1 } else { exit 0 }
