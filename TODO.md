@@ -51,7 +51,15 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   環境変数構文、パス区切り、`--mount` のドライブレター、Docker Desktop for Windows のマウント所有者。
   出力のバイト一致は `make verify-digest`（macOS/Linux）と `-ExpectedDigest`（Windows）で突き合わせる
   - [x] macOS 側の基準値と Linux コンテナ側の検証は完了（両者一致）
-  - [ ] Windows 実機でのネイティブ CLI 検証（B/C/D 群）。Docker 不要で実施できる
+  - [x] Windows 実機でのネイティブ CLI 検証（B/C/D 群）— **完了**。
+    Windows 11 ARM64 / PowerShell 5.1 / en-US / コードページ 437 で 8 項目パス
+    - 生成物が macOS・Linux コンテナとバイト一致（digest 68c3dd1f…）。OS をまたいだ
+      決定論が実機で裏付けられた（ADR-0001）
+    - 生成物の改行が LF（`newline="\n"` の修正が実機で効いている）
+    - `PYTHONUTF8` 未設定でも `\uXXXX` にエスケープされて落ちない
+    - バックスラッシュ／スラッシュ両方のパス区切りが通る
+    - この検証で USAGE.md 8.1 の記述漏れを発見（PowerShell の節に `chcp 65001` が
+      無く、`PYTHONUTF8=1` だけではコンソールで化ける）。修正済み
   - [ ] **Git Bash 経路の検証** — 顧客環境には Git Bash があるため、PowerShell と並ぶ
     実使用経路。`MSYS_NO_PATHCONV=1` と `$(pwd -W)` を使う形を USAGE.md 9.2 に書いたが
     **実機未検証**。MSYS2 のパス変換は `target=/work` にも及ぶので、ここを外すと

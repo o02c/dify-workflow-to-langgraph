@@ -98,8 +98,24 @@ function Invoke-Native {
         [Parameter(Mandatory = $true)][string]$Exe,
         [string[]]$Arguments = @(),
         [string]$WorkDir,
-        [hashtable]$EnvVars = @{}
+        [hashtable]$EnvVars = @{},
+        [System.Text.Encoding]$DecodeAs
     )
+
+    # PowerShell decodes a native command's stdout with [Console]::OutputEncoding,
+    # which on a legacy console is the OEM code page (437 on en-US). A child that
+    # emits UTF-8 -- as Python does under PYTHONUTF8=1 -- then arrives as mojibake.
+    # Callers that know the child's encoding pass it here. Deliberately not named
+    # -OutputEncoding: that would shadow PowerShell's automatic $OutputEncoding.
+    $prevConsoleEnc = $null
+    if ($DecodeAs) {
+        try {
+            $prevConsoleEnc = [Console]::OutputEncoding
+            [Console]::OutputEncoding = $DecodeAs
+        } catch {
+            $prevConsoleEnc = $null
+        }
+    }
 
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
@@ -127,6 +143,7 @@ function Invoke-Native {
     } finally {
         if ($pushed) { Pop-Location }
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+        if ($prevConsoleEnc) { try { [Console]::OutputEncoding = $prevConsoleEnc } catch {} }
         $ErrorActionPreference = $prevEap
     }
 }
@@ -309,12 +326,18 @@ function Invoke-Python {
             uv is the recommended (and sufficient) install: it fetches CPython
             itself, so a bare python need not be on PATH at all.
     #>
-    param([string[]]$PyArgs, [string]$WorkDir, [hashtable]$EnvVars = @{})
+    param(
+        [string[]]$PyArgs,
+        [string]$WorkDir,
+        [hashtable]$EnvVars = @{},
+        [System.Text.Encoding]$DecodeAs
+    )
     if ($useUv) {
-        return Invoke-Native -Exe $uvExe -WorkDir $WorkDir -EnvVars $EnvVars `
+        return Invoke-Native -Exe $uvExe -WorkDir $WorkDir -EnvVars $EnvVars -DecodeAs $DecodeAs `
             -Arguments (@("run", "--project", $RepoRoot, "python") + $PyArgs)
     }
-    return Invoke-Native -Exe $pyExe -WorkDir $WorkDir -EnvVars $EnvVars -Arguments $PyArgs
+    return Invoke-Native -Exe $pyExe -WorkDir $WorkDir -EnvVars $EnvVars -DecodeAs $DecodeAs `
+        -Arguments $PyArgs
 }
 
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("d2l-verify-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -448,12 +471,17 @@ if ($runtimeDepsOk) {
         }
     }
 
-    Invoke-Checked "C2" "With PYTHONUTF8=1, Japanese is printed correctly" {
-        $r = Invoke-Python @("-m", "simple_workflow") $pkgParent @{ PYTHONUTF8 = "1" }
+    Invoke-Checked "C2" "With PYTHONUTF8=1, the workflow emits UTF-8" {
+        # Decode as UTF-8: the assertion is about the bytes Python writes, not
+        # about what a code-page-437 console can render. Making those bytes
+        # readable *on screen* additionally needs `chcp 65001` (USAGE 8.1).
+        $r = Invoke-Python @("-m", "simple_workflow") $pkgParent @{ PYTHONUTF8 = "1" } `
+            -DecodeAs ([System.Text.Encoding]::UTF8)
         if ($r.ExitCode -eq 0 -and $r.Output -match "翻訳結果") {
-            Add-Result "C2" "With PYTHONUTF8=1, Japanese is printed correctly" "PASS"
+            Add-Result "C2" "With PYTHONUTF8=1, the workflow emits UTF-8" "PASS" `
+                ("UTF-8 bytes correct; console code page {0} still needs chcp 65001 to render them" -f $codepage)
         } else {
-            Add-Result "C2" "With PYTHONUTF8=1, Japanese is printed correctly" "FAIL" $r.Output
+            Add-Result "C2" "With PYTHONUTF8=1, the workflow emits UTF-8" "FAIL" $r.Output
         }
     }
 }
