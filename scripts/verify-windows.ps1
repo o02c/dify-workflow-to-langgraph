@@ -284,7 +284,11 @@ if ($uvExe) { $uvVersion = (Invoke-Native -Exe $uvExe -Arguments @("--version"))
     RepoRoot       = $RepoRoot
     PYTHONUTF8     = $(if ($env:PYTHONUTF8) { $env:PYTHONUTF8 } else { "(unset)" })
     ScriptCommit   = $(
-        if ($script:SourceCommit -like '$Format:*') {
+        # Build the placeholder by concatenation rather than writing the literal
+        # token a second time: export-subst rewrites *every* occurrence of it in
+        # the file, so a second one gets silently mangled along with the real one.
+        $placeholder = '$' + 'Format:%H' + '$'
+        if ($script:SourceCommit -eq $placeholder) {
             "(working checkout, not a git archive export)"
         } else {
             $script:SourceCommit.Substring(0, [Math]::Min(12, $script:SourceCommit.Length))
