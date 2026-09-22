@@ -101,8 +101,28 @@ script copies it to local disk before running anything -- Windows cannot give a
 native process a UNC working directory, so `uv.exe` would otherwise run against
 `C:\Windows`. Pass `-NoCopy` to override.
 
-Two Windows-specific traps the script handles so they do not have to be
+The script can be dry-run on macOS/Linux with PowerShell installed
+(`brew install powershell`), which exercises its whole control flow before it is
+handed to a Windows host:
+
+```bash
+pwsh -File scripts/verify-windows.ps1 -ExpectedDigest $(make -s verify-digest)
+```
+
+That proves nothing about Windows -- the run prints a DRY RUN banner saying so,
+and the Windows-only check is skipped -- but it is the only way to catch bugs in
+the script itself without burning a round trip on the VM. Worth also running
+`Invoke-ScriptAnalyzer` with `PSUseCompatibleSyntax` targeting 5.1, since
+PowerShell 7 silently accepts syntax that 5.1 cannot even parse.
+
+Three Windows-specific traps the script handles so they do not have to be
 rediscovered:
+
+- **`.ps1` files need a UTF-8 BOM.** Windows PowerShell 5.1 reads a BOM-less
+  script as the system ANSI code page, not UTF-8. This script contains Japanese
+  string literals, so without the BOM they arrive as mojibake on an English
+  Windows host and the comparisons fail for reasons that look like product bugs.
+
 
 - **The Microsoft Store `python.exe` stub.** Windows puts an App Execution Alias
   on PATH under `WindowsApps`. `Get-Command python` finds it, but running it just

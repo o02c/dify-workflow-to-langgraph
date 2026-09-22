@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Verify the documented Windows behaviour of dify2langgraph on a real Windows host.
 
@@ -146,6 +146,26 @@ function Get-ToolPath {
     return $null
 }
 
+function Join-Parts {
+    <#
+        .SYNOPSIS
+            Join path segments using the platform separator.
+        .NOTES
+            Join-Path takes only one -ChildPath under Windows PowerShell 5.1, so
+            multi-segment paths get chained here rather than written with literal
+            backslashes. That also keeps the script runnable on macOS/Linux for a
+            dry run, which is the only way to exercise its control flow before
+            handing it to a Windows host.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Base,
+        [Parameter(ValueFromRemainingArguments = $true)][string[]]$Parts
+    )
+    $joined = $Base
+    foreach ($seg in $Parts) { $joined = Join-Path -Path $joined -ChildPath $seg }
+    return $joined
+}
+
 function Get-RealPythonPath {
     <#
         .SYNOPSIS
@@ -175,7 +195,7 @@ function Get-RealPythonPath {
 $RepoRoot = $RepoRoot -replace '^Microsoft\.PowerShell\.Core\\FileSystem::', ''
 
 if (-not $NoCopy -and $RepoRoot.StartsWith("\\")) {
-    $localRoot = Join-Path $env:TEMP ("d2l-repo-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    $localRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("d2l-repo-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
     Write-Host "RepoRoot is on a network share:" -ForegroundColor Yellow
     Write-Host "  $RepoRoot" -ForegroundColor Yellow
     Write-Host "Windows cannot give uv.exe or python.exe a UNC working directory," -ForegroundColor Yellow
@@ -249,7 +269,8 @@ if (-not $pyExe -and -not $uvExe) {
 }
 
 $useUv = [bool]$uvExe
-$fixture = Join-Path $RepoRoot "tests\fixtures\guardduty_handler.yml"
+$onWindows = ($PSVersionTable.PSEdition -eq "Desktop") -or ($IsWindows -eq $true)
+$fixture = Join-Parts $RepoRoot "tests" "fixtures" "guardduty_handler.yml"
 if (-not (Test-Path $fixture)) {
     Write-Host "Fixture not found: $fixture" -ForegroundColor Red
     Write-Host ""
@@ -296,11 +317,11 @@ function Invoke-Python {
     return Invoke-Native -Exe $pyExe -WorkDir $WorkDir -EnvVars $EnvVars -Arguments $PyArgs
 }
 
-$work = Join-Path $env:TEMP ("d2l-verify-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+$work = Join-Path ([System.IO.Path]::GetTempPath()) ("d2l-verify-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 Copy-Item -LiteralPath $fixture -Destination $work
-$digestPy = Join-Path $RepoRoot "scripts\output_digest.py"
-$genRoot = Join-Path $work "out\guardduty_handler"
+$digestPy = Join-Parts $RepoRoot "scripts" "output_digest.py"
+$genRoot = Join-Parts $work "out" "guardduty_handler"
 
 # ---------------------------------------------------------------------------
 # B. Converter runs natively on Windows
@@ -344,13 +365,20 @@ Invoke-Checked "B3" "Generated files use LF, not CRLF (cross-platform determinis
 }
 
 Invoke-Checked "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" {
+    if (-not $onWindows) {
+        # Only Windows accepts both separators; elsewhere a backslash is an
+        # ordinary character in a filename, so the check has nothing to assert.
+        Add-Result "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" "SKIP" `
+            "Windows-only claim; this host is not Windows"
+        return
+    }
     $bs = Join-Path $work "bs"
     $fs = Join-Path $work "fs"
     $r1 = Invoke-Converter @("tests\fixtures\guardduty_handler.yml", "-o", $bs, "--skip-implement") $RepoRoot
     $r2 = Invoke-Converter @("tests/fixtures/guardduty_handler.yml", "-o", $fs, "--skip-implement") $RepoRoot
     $ok = ($r1.ExitCode -eq 0) -and ($r2.ExitCode -eq 0) `
-        -and (Test-Path (Join-Path $bs "guardduty_handler\state.py")) `
-        -and (Test-Path (Join-Path $fs "guardduty_handler\state.py"))
+        -and (Test-Path (Join-Parts $bs "guardduty_handler" "state.py")) `
+        -and (Test-Path (Join-Parts $fs "guardduty_handler" "state.py"))
     if ($ok) {
         Add-Result "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" "PASS"
     } else {
@@ -395,10 +423,10 @@ if (-not $runtimeDepsOk) {
     try {
         # Give one node a Japanese return value, standing in for an implemented
         # body, so running the package has non-ASCII in the state it prints.
-        Copy-Item -LiteralPath (Join-Path $RepoRoot "tests\fixtures\simple_workflow.yml") `
+        Copy-Item -LiteralPath (Join-Parts $RepoRoot "tests" "fixtures" "simple_workflow.yml") `
             -Destination $work -Force
         $null = Invoke-Converter @("simple_workflow.yml", "-o", "run", "--skip-implement") $work
-        $llmNode = Join-Path $pkgParent "simple_workflow\nodes\llm_node.py"
+        $llmNode = Join-Parts $pkgParent "simple_workflow" "nodes" "llm_node.py"
         $src = [System.IO.File]::ReadAllText($llmNode, [System.Text.Encoding]::UTF8)
         $src = $src.Replace('"text": "placeholder"', '"text": "翻訳結果"')
         [System.IO.File]::WriteAllText($llmNode, $src, (New-Object System.Text.UTF8Encoding $false))
@@ -491,9 +519,9 @@ if ($SkipDocker) {
             $r = Invoke-Native -Exe $dockerExe -Arguments @(
                 "run", "--rm", "--mount", "type=bind,source=$dockerOut,target=/work",
                 "dify2langgraph-verify", "guardduty_handler.yml", "-o", "out", "--skip-implement")
-            if ($r.ExitCode -eq 0 -and (Test-Path (Join-Path $dockerOut "out\guardduty_handler\state.py"))) {
+            if ($r.ExitCode -eq 0 -and (Test-Path (Join-Parts $dockerOut "out" "guardduty_handler" "state.py"))) {
                 Add-Result "E2" "--mount handles a Windows drive-letter source path (USAGE 9)" "PASS"
-                $dr = Invoke-Python @($digestPy, "--dir", (Join-Path $dockerOut "out\guardduty_handler"))
+                $dr = Invoke-Python @($digestPy, "--dir", (Join-Parts $dockerOut "out" "guardduty_handler"))
                 $d = ($dr.Output -split "`n" | Select-Object -Last 1).Trim()
                 if ($d -eq $digest) {
                     Add-Result "E3" "Container output matches the native Windows run" "PASS" $d
@@ -512,6 +540,16 @@ if ($SkipDocker) {
 # Summary
 # ---------------------------------------------------------------------------
 Write-Host "`n=== Summary ===" -ForegroundColor Cyan
+
+if (-not $onWindows) {
+    # Running here at all is a dry run: it exercises the control flow (which is
+    # otherwise impossible to test before handing the script to a Windows host)
+    # but proves nothing about Windows itself. Say so rather than letting a row
+    # reading "builds on Windows" imply otherwise.
+    Write-Host "DRY RUN on a non-Windows host: the control flow was exercised," -ForegroundColor Magenta
+    Write-Host "but no Windows-specific claim was actually verified." -ForegroundColor Magenta
+    Write-Host ""
+}
 $script:Results | Format-Table Id, Status, Claim -AutoSize
 
 $passed = @($script:Results | Where-Object { $_.Status -eq "PASS" }).Count
