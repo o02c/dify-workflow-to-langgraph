@@ -13,10 +13,10 @@ class BedrockProvider(LLMProvider):
 
     Supports Claude models via Bedrock Runtime API.
 
-    Example models:
-    - anthropic.claude-3-5-sonnet-20241022-v2:0
-    - anthropic.claude-3-5-haiku-20241022-v1:0
-    - anthropic.claude-3-opus-20240229-v1:0
+    Example models (geo or global inference profile ids -- the bare
+    `anthropic.` form is not served on-demand by bedrock-runtime):
+    - global.anthropic.claude-haiku-4-5-20251001-v1:0
+    - us.anthropic.claude-haiku-4-5-20251001-v1:0
     """
 
     def __init__(
@@ -126,7 +126,8 @@ class BedrockProvider(LLMProvider):
         )
 
 
-# Convenience model constants
-CLAUDE_SONNET = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-CLAUDE_HAIKU = "anthropic.claude-3-5-haiku-20241022-v1:0"
-CLAUDE_OPUS = "anthropic.claude-3-opus-20240229-v1:0"
+# Convenience model constants. Global inference profiles: `bedrock-runtime` does
+# not accept the bare `anthropic.` id for on-demand throughput. Swap `global.`
+# for a geo prefix (`us.`, `eu.`, `au.`, `jp.`) to keep requests in one region.
+CLAUDE_HAIKU = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+CLAUDE_SONNET = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"

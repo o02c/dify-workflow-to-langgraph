@@ -137,5 +137,5 @@ def generate_graph_file(
 
     content = "\n".join(lines)
     output_path = output_dir / "graph.py"
-    output_path.write_text(content, encoding="utf-8")
+    output_path.write_text(content, encoding="utf-8", newline="\n")
     logger.info("Generated: %s", output_path)

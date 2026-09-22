@@ -307,7 +307,7 @@ class CodeGenerationEngine:
             implementations.append(impl)
 
             if not dry_run:
-                node_file.write_text(new_code, encoding="utf-8")
+                node_file.write_text(new_code, encoding="utf-8", newline="\n")
                 logger.info("Generated: %s", node_file)
 
         return implementations

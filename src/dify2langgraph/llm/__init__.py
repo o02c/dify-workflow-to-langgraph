@@ -4,6 +4,7 @@ This module provides a unified interface for multiple LLM providers:
 - Amazon Bedrock (Claude via AWS)
 - OpenAI (GPT models)
 - Anthropic (Claude via direct API)
+- Google (Gemini models)
 
 Example usage:
     from dify2langgraph.llm import create_provider, LLMConfig
@@ -51,10 +52,50 @@ def _load_providers() -> None:
         pass
 
     try:
+        from .google import GoogleProvider
+        _PROVIDERS["google"] = GoogleProvider
+    except ImportError:
+        pass
+
+    try:
         from .anthropic import AnthropicProvider
         _PROVIDERS["anthropic"] = AnthropicProvider
     except ImportError:
         pass
+
+
+# Each provider names its models differently, so there is no single sensible
+# default. Without this, `--llm-provider google` inherits the OpenAI default and
+# fails with "models/gpt-4o-mini is not found", which reads like a broken
+# provider rather than a missing --llm-model.
+# Model ids go stale: the 3.5 generation reached end of life and stopped being
+# servable, so a default naming it fails with a 404 that looks like a broken
+# provider. Re-check these when bumping SDKs.
+#
+# Bedrock is the awkward one. This project talks to `bedrock-runtime`, where the
+# bare `anthropic.` id is not accepted for on-demand throughput -- it needs a geo
+# (`us.`/`eu.`/`au.`/`jp.`) or global inference profile. `global.` is used here
+# because it is the only one that works from every region, which is what a
+# default has to do; it can route outside the source region, so anyone with data
+# residency requirements should pass a geo profile via --llm-model.
+_DEFAULT_MODELS: dict[str, str] = {
+    "openai": "gpt-4o-mini",
+    "anthropic": "claude-haiku-4-5-20251001",
+    "bedrock": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "google": "gemini-2.5-flash",
+}
+
+
+def default_model(provider_name: str) -> str | None:
+    """Return the default model for a provider.
+
+    Args:
+        provider_name: Name of the provider.
+
+    Returns:
+        A model identifier, or None if the provider is unknown.
+    """
+    return _DEFAULT_MODELS.get(provider_name)
 
 
 def create_provider(
@@ -65,7 +106,7 @@ def create_provider(
     """Create an LLM provider instance.
 
     Args:
-        provider_name: Name of the provider ('bedrock', 'openai', 'anthropic').
+        provider_name: Name of the provider ('bedrock', 'openai', 'anthropic', 'google').
         config: LLM configuration.
         **kwargs: Provider-specific arguments.
 
@@ -101,6 +142,7 @@ def available_providers() -> list[str]:
 
 __all__ = [
     "LLMConfig",
+    "default_model",
     "LLMProvider",
     "LLMResponse",
     "Message",

@@ -1,5 +1,6 @@
 """Tests for the translator module."""
 
+import ast
 import subprocess
 import tempfile
 from pathlib import Path
@@ -300,6 +301,88 @@ class TestSelfContainedPackage:
             kr = (output_dir / "nodes" / "node_1722397470145.py").read_text(encoding="utf-8")
             assert "from ..retriever import get_retriever" in kr
             assert "get_retriever().retrieve(" in kr
+
+
+class TestGeneratedOutputIsByteStableAcrossPlatforms:
+    """The same DSL must produce the same bytes wherever the converter runs."""
+
+    def test_copied_templates_are_normalised_to_lf(self):
+        """A CRLF template must not reach the output (ADR-0001).
+
+        llm.py and retriever.py are copied into every generated package. A byte
+        copy would carry whatever the checkout has, and Git for Windows defaults
+        to core.autocrlf=true -- so a plain clone there would produce CRLF output
+        while the container produced LF, and the two would stop being
+        byte-identical. Unlike the assertion below, this one bites on any OS.
+        """
+        from dify2langgraph import cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            crlf_templates = Path(tmpdir) / "templates"
+            crlf_templates.mkdir()
+            for template in cli.TEMPLATES_DIR.glob("*.py"):
+                crlf_templates.joinpath(template.name).write_bytes(
+                    template.read_bytes().replace(b"\n", b"\r\n")
+                )
+
+            output_dir = Path(tmpdir) / "out"
+            output_dir.mkdir()
+            original = cli.TEMPLATES_DIR
+            cli.TEMPLATES_DIR = crlf_templates
+            try:
+                cli.copy_templates(output_dir)
+            finally:
+                cli.TEMPLATES_DIR = original
+
+            copied = sorted(output_dir.glob("*.py"))
+            assert copied, "no templates were copied"
+            crlf = [p.name for p in copied if b"\r\n" in p.read_bytes()]
+            assert not crlf, f"CRLF survived the copy: {crlf}"
+
+    def test_every_generated_write_pins_the_newline(self):
+        """No write of generated content may take Python's default newline.
+
+        Text mode rewrites "\n" to os.linesep, so an unpinned write emits CRLF on
+        Windows and LF everywhere else. That is invisible to the assertion below
+        when the suite runs on macOS or Linux, which is most of the time -- so
+        check the calls themselves rather than only their output.
+        """
+        package = Path(__file__).resolve().parents[1] / "src" / "dify2langgraph"
+        offenders = []
+        for module in sorted(package.rglob("*.py")):
+            tree = ast.parse(module.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "write_text"
+                    and not any(kw.arg == "newline" for kw in node.keywords)
+                ):
+                    offenders.append(f"{module.relative_to(package)}:{node.lineno}")
+
+        assert not offenders, "write_text without newline=: " + ", ".join(offenders)
+
+    def test_generated_files_use_lf_line_endings(self):
+        """No CRLF in any generated file, on any host OS (ADR-0001).
+
+        Python's text mode rewrites "\n" to ``os.linesep`` unless ``newline`` is
+        pinned, so a native Windows run would emit CRLF while the container
+        (Linux) emits LF. That would make the output byte-different depending on
+        how the user happened to run the converter, and would churn the whole
+        file in git when they switch between the two documented paths.
+
+        This assertion is trivially true on macOS/Linux and is the one that
+        actually bites on Windows -- which is the point of keeping it.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "guardduty_handler.yml", output_dir)
+
+            generated = sorted(output_dir.rglob("*.py"))
+            assert generated, "fixture produced no files"
+
+            crlf = [p.name for p in generated if b"\r\n" in p.read_bytes()]
+            assert not crlf, f"CRLF line endings in: {crlf}"
 
 
 class TestGeneratedCodeIsLintClean:

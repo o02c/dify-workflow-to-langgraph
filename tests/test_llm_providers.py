@@ -10,8 +10,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from dify2langgraph.cli import _credential_hint, _provider_kwargs
-from dify2langgraph.llm import LLMConfig
+from dify2langgraph.llm import LLMConfig, Message, available_providers, default_model
+from dify2langgraph.llm.anthropic import AnthropicProvider
 from dify2langgraph.llm.bedrock import BedrockProvider
+from dify2langgraph.llm.google import GoogleProvider
 
 CONFIG = LLMConfig(model="anthropic.claude-3-5-haiku-20241022-v1:0")
 
@@ -171,6 +173,185 @@ class TestCredentialHint:
 
     def test_unrelated_error_gets_no_hint(self):
         assert _credential_hint(ValueError("boom"), self.args()) is None
+
+
+class TestAnthropicTemperature:
+    """temperature is only sent to SDKs that still accept it.
+
+    anthropic 1.x removed temperature (and top_p) from ``messages.create()``.
+    pyproject declares ``anthropic>=0.75.0``, a range that spans both APIs, so the
+    provider asks the installed SDK instead of assuming. Passing it to 1.x fails
+    the entire call with "unexpected keyword argument 'temperature'" -- which
+    reads like a credentials problem and is easy to misdiagnose.
+    """
+
+    def _capture_kwargs(self, monkeypatch, create_params: set[str]) -> dict:
+        """Build a provider against a faked SDK surface and return the call kwargs."""
+        monkeypatch.setattr(
+            "dify2langgraph.llm.anthropic._CREATE_PARAMS", frozenset(create_params)
+        )
+        provider = AnthropicProvider(LLMConfig(model="claude-x", temperature=0.25), api_key="k")
+
+        response = MagicMock()
+        response.content = []
+        response.usage.input_tokens = 1
+        response.usage.output_tokens = 2
+        provider.client = MagicMock()
+        provider.client.messages.create.return_value = response
+
+        provider.generate([Message(role="user", content="hi")])
+        return provider.client.messages.create.call_args.kwargs
+
+    def test_detection_sees_a_real_signature(self):
+        """Guards the probe, not just the branch.
+
+        Both branch tests monkeypatch _CREATE_PARAMS. If inspect.signature ever
+        degraded to (*args, **kwargs) -- a decorator without functools.wraps --
+        the set would silently become {"args", "kwargs"}, temperature would be
+        dropped forever, and nothing else here would notice.
+        """
+        from dify2langgraph.llm.anthropic import _CREATE_PARAMS
+
+        assert "max_tokens" in _CREATE_PARAMS
+        assert "messages" in _CREATE_PARAMS
+
+    def test_extra_cannot_bypass_the_guard(self, monkeypatch):
+        """config.extra is merged too, so it has to be filtered as well."""
+        monkeypatch.setattr(
+            "dify2langgraph.llm.anthropic._CREATE_PARAMS",
+            frozenset({"model", "messages", "max_tokens"}),
+        )
+        provider = AnthropicProvider(
+            LLMConfig(model="claude-x", extra={"temperature": 0.9, "top_p": 0.1}),
+            api_key="k",
+        )
+        response = MagicMock()
+        response.content = []
+        response.usage.input_tokens = 1
+        response.usage.output_tokens = 2
+        provider.client = MagicMock()
+        provider.client.messages.create.return_value = response
+
+        provider.generate([Message(role="user", content="hi")])
+        kwargs = provider.client.messages.create.call_args.kwargs
+
+        assert "temperature" not in kwargs
+        assert "top_p" not in kwargs
+
+    def test_extra_still_overrides_on_a_supporting_sdk(self, monkeypatch):
+        """Filtering must not cost extra its precedence where it is valid."""
+        monkeypatch.setattr(
+            "dify2langgraph.llm.anthropic._CREATE_PARAMS",
+            frozenset({"model", "messages", "max_tokens", "temperature"}),
+        )
+        provider = AnthropicProvider(
+            LLMConfig(model="claude-x", temperature=0.1, extra={"temperature": 0.9}),
+            api_key="k",
+        )
+        response = MagicMock()
+        response.content = []
+        response.usage.input_tokens = 1
+        response.usage.output_tokens = 2
+        provider.client = MagicMock()
+        provider.client.messages.create.return_value = response
+
+        provider.generate([Message(role="user", content="hi")])
+
+        assert provider.client.messages.create.call_args.kwargs["temperature"] == 0.9
+
+    def test_temperature_sent_when_the_sdk_accepts_it(self, monkeypatch):
+        """Older SDKs still get the configured sampling temperature."""
+        kwargs = self._capture_kwargs(monkeypatch, {"model", "messages", "max_tokens", "temperature"})
+
+        assert kwargs["temperature"] == 0.25
+
+    def test_temperature_omitted_when_the_sdk_rejects_it(self, monkeypatch):
+        """anthropic 1.x: the call goes out without it rather than failing."""
+        kwargs = self._capture_kwargs(monkeypatch, {"model", "messages", "max_tokens"})
+
+        assert "temperature" not in kwargs
+        assert kwargs["model"] == "claude-x"
+
+
+class TestDefaultModel:
+    """An unset --llm-model has to follow --llm-provider."""
+
+    def test_every_registered_provider_has_a_default(self):
+        """Otherwise --llm-provider <x> alone fails with a confusing 404."""
+        missing = [p for p in available_providers() if default_model(p) is None]
+
+        assert missing == []
+
+    def test_defaults_are_pinned_exactly(self):
+        """Pinned, not shape-matched.
+
+        A "looks like a claude id" assertion happily accepts a retired model, and
+        a default naming a retired model fails with a 404 that reads like a broken
+        provider. Spelling them out means replacing one is a deliberate edit.
+        """
+        assert default_model("openai") == "gpt-4o-mini"
+        assert default_model("google") == "gemini-2.5-flash"
+        assert default_model("anthropic") == "claude-haiku-4-5-20251001"
+        assert default_model("bedrock") == "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    def test_bedrock_default_is_an_inference_profile(self):
+        """bedrock-runtime rejects the bare `anthropic.` id for on-demand use.
+
+        It needs a geo (us./eu./au./jp.) or global inference profile, so a default
+        in the bare form would fail for every caller.
+        """
+        assert default_model("bedrock").split(".")[0] in {"global", "us", "eu", "au", "jp"}
+
+    def test_unknown_provider_has_no_default(self):
+        """Resolution stays None so the provider lookup reports the real error."""
+        assert default_model("nope") is None
+
+
+class TestGoogleProvider:
+    """Gemini needs the system prompt and roles reshaped, not just passed through."""
+
+    def _generate(self, monkeypatch, messages: list[Message]):
+        """Run generate() against a mocked client and return the SDK call kwargs."""
+        monkeypatch.setenv("GOOGLE_API_KEY", "k")
+        with patch("dify2langgraph.llm.google.genai.Client"):
+            provider = GoogleProvider(LLMConfig(model="gemini-x", temperature=0.5))
+
+        response = MagicMock()
+        response.text = "hello"
+        response.usage_metadata.prompt_token_count = 3
+        response.usage_metadata.candidates_token_count = 4
+        provider.client = MagicMock()
+        provider.client.models.generate_content.return_value = response
+
+        result = provider.generate(messages)
+        return provider.client.models.generate_content.call_args.kwargs, result
+
+    def test_system_message_becomes_system_instruction(self, monkeypatch):
+        """Gemini takes the system prompt as config, not as a message."""
+        kwargs, _ = self._generate(
+            monkeypatch,
+            [Message(role="system", content="be terse"), Message(role="user", content="hi")],
+        )
+
+        assert kwargs["config"].system_instruction == "be terse"
+        assert len(kwargs["contents"]) == 1
+        assert kwargs["contents"][0].role == "user"
+
+    def test_assistant_role_is_renamed_to_model(self, monkeypatch):
+        """The API knows "user" and "model"; "assistant" would be rejected."""
+        kwargs, _ = self._generate(
+            monkeypatch,
+            [Message(role="user", content="hi"), Message(role="assistant", content="yo")],
+        )
+
+        assert [c.role for c in kwargs["contents"]] == ["user", "model"]
+
+    def test_response_and_usage_are_mapped(self, monkeypatch):
+        """Token counts land under the same keys the other providers use."""
+        _, result = self._generate(monkeypatch, [Message(role="user", content="hi")])
+
+        assert result.content == "hello"
+        assert result.usage == {"input_tokens": 3, "output_tokens": 4}
 
 
 class TestDotenvDiscovery:

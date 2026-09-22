@@ -78,8 +78,8 @@ dify2langgraph workflow.yml -o output/ --skip-implement
 | `-o`, `--output` | `outputs` | 出力ディレクトリ |
 | `--skip-implement` | off | **LLM によるノード本体実装をスキップ**（決定論的なテンプレート/Stub のみ出力） |
 | `--name-nodes` | off | LLM でノード名を意味的な snake_case に生成（日本語タイトル対応） |
-| `--llm-provider` | `openai` | 生成補助に使う LLM プロバイダ（`openai` / `anthropic` / `bedrock`） |
-| `--llm-model` | `gpt-4o-mini` | 生成補助に使う LLM モデル |
+| `--llm-provider` | `openai` | 生成補助に使う LLM プロバイダ（`openai` / `anthropic` / `bedrock` / `google`） |
+| `--llm-model` | プロバイダ既定 | 生成補助に使う LLM モデル。未指定ならプロバイダごとの既定（`openai` なら `gpt-4o-mini`、`google` なら `gemini-2.5-flash`） |
 | `--aws-region` | （未指定） | `--llm-provider bedrock` のリージョン。未指定なら `AWS_REGION` / `AWS_DEFAULT_REGION` → プロファイルの `region` の順に解決 |
 | `--aws-profile` | （未指定） | `--llm-provider bedrock` の AWS プロファイル。静的な資格情報を環境変数で渡す場合は**指定しない** |
 | `--lint` | off | 生成コードに linter（ruff）を実行 |
@@ -159,12 +159,15 @@ python -m workflow
 ## 6. 生成に LLM を使う場合の設定
 
 `--name-nodes` やノード本体実装（既定 ON）を使うと、変換時に LLM を呼びます。
-プロバイダは `--llm-provider` / `--llm-model` で選び、認証情報は環境変数で渡します。
+プロバイダは `--llm-provider` で選び、認証情報は環境変数で渡します。`--llm-model` を
+省略すると、そのプロバイダの既定モデルが使われます（プロバイダごとにモデル名の体系が
+違うため、単一の既定値は成立しません）。
 
 | プロバイダ | 認証 |
 |-----------|------|
 | OpenAI | `OPENAI_API_KEY` |
 | Anthropic | `ANTHROPIC_API_KEY` |
+| Google | `GOOGLE_API_KEY`（`GEMINI_API_KEY` も可） |
 | Bedrock | AWS 標準認証（region の指定は必須。[9.5](#95-bedrock-を使う) 参照） |
 
 ```bash
@@ -230,28 +233,42 @@ Windows でも同じ CLI がそのまま動きますが、次の 2 点だけ mac
 
 Dify のワークフローはノード名・プロンプト・出力に日本語（中国語）を含むのが普通です。
 一方 Windows の Python は、標準出力・標準エラーの文字コードに**コンソールのコードページ**
-（日本語環境なら cp932）を使います。UTF-8 にしておくと文字化けや実行時エラーを避けられます。
+（日本語環境なら cp932、英語環境なら cp437）を使います。
 
-**推奨: UTF-8 モードを有効にする**
+**設定は 2 つ必要です。片方だけでは読めません。**
+
+| | 何をするか | 設定しないとどうなるか |
+|---|---|---|
+| ① `PYTHONUTF8=1` | Python が UTF-8 で**出力する** | 表現できない文字が `\uXXXX` にエスケープされる |
+| ② `chcp 65001` | コンソールが UTF-8 として**解釈する** | UTF-8 のバイト列が化ける（例: `翻訳結果` → `τ┐╗Φ¿│τ╡Éµ₧£`） |
+
+PowerShell:
 
 ```powershell
-# 現在のセッションだけ
 $env:PYTHONUTF8 = "1"
+chcp 65001
 
 # 常時有効にする（ユーザー環境変数に登録。以後の新しいセッションから有効）
 setx PYTHONUTF8 1
 ```
 
-コマンドプロンプトの場合:
+コマンドプロンプト:
 
 ```bat
 set PYTHONUTF8=1
 chcp 65001
 ```
 
-> UTF-8 モードを使わない場合でも、生成物の `__main__.py` はコンソールが表現できない文字を
-> `\uXXXX` にエスケープして出力するため、`UnicodeEncodeError` で落ちることはありません。
-> ただし表示は読みづらくなるので、`PYTHONUTF8=1` の設定を推奨します。
+> ②の代わりに、PowerShell の現在のセッションだけを UTF-8 にすることもできます。
+> `chcp` と違いコンソール全体の設定を変えません。
+>
+> ```powershell
+> [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+> ```
+
+> **設定しなくてもクラッシュはしません。** 生成物の `__main__.py` はコンソールが表現できない
+> 文字を `\uXXXX` にエスケープして出力するため、`UnicodeEncodeError` で落ちることはありません
+> （英語版 Windows・cp437 で確認済み）。ただし読みづらいので上記の設定を推奨します。
 
 ### 8.2 環境変数の指定方法
 
@@ -264,12 +281,18 @@ PowerShell / コマンドプロンプトでは使えません。以下に読み�
 | `VAR=値 command` | `$env:VAR = "値"` の後に `command` | `set VAR=値` の後に `command` |
 | `PYTHONPATH=src python -m ...` | `$env:PYTHONPATH = "src"` の後に `python -m ...` | `set PYTHONPATH=src` の後に `python -m ...` |
 
+**Git Bash を使う場合は、左端の bash 列がそのまま使えます。** `export VAR=値` も
+`VAR=値 command` も期待どおり動きます。ただし Docker と組み合わせるときだけは
+パス変換に注意が必要です（[9.2](#92-変換する)参照）。
+
 環境変数を使わず、実行ディレクトリに `.env` ファイルを置く方法（[5 章](#5-rag知識取得の設定)参照）
 が最も移植性が高くおすすめです。
 
 ### 8.3 補足
 
 - パス区切りは `\` / `/` どちらでも動作します（内部で `pathlib` を使用）。
+- 生成物の改行コードは OS に関わらず常に **LF** です。Windows でネイティブ実行しても
+  Docker で実行しても同じバイト列になるので、生成コードを Git 管理しても差分が出ません。
 - `cd output && python -m workflow` の `&&` は PowerShell 7 以降でのみ有効です。
   Windows PowerShell 5.1 では `cd output; python -m workflow` と書いてください。
 - リポジトリ同梱の `Makefile` と `scripts/build-release.sh` は開発者向けで、
@@ -335,6 +358,24 @@ docker run --rm `
   --mount type=bind,source="$PWD",target=/work `
   dify2langgraph workflow.yml -o outputs --skip-implement
 ```
+
+Git Bash の場合:
+
+```bash
+MSYS_NO_PATHCONV=1 docker run --rm \
+  --mount type=bind,source="$(pwd -W)",target=/work \
+  dify2langgraph workflow.yml -o outputs --skip-implement
+```
+
+> **Git Bash では 2 点の読み替えが必要です。**
+>
+> 1. `MSYS_NO_PATHCONV=1` を付ける。Git Bash は MSYS2 のランタイム上で動いており、
+>    Unix のパスに見える引数を Windows のパスへ自動変換してから、ネイティブの実行ファイルに
+>    渡します。この変換は `target=/work` にも及び、`C:/Program Files/Git/work` のような
+>    別物に化けます。この環境変数で変換を無効化できます。
+> 2. `$PWD` ではなく `$(pwd -W)` を使う。Git Bash の `$PWD` は `/c/Users/you/project` という
+>    Unix 形式ですが、Docker が期待するのは `C:/Users/you/project` です。`pwd -W` が
+>    Windows 形式を返します。
 
 > **`-v` ではなく `--mount type=bind,source=...` を使ってください。** Windows のパスは
 > `C:\Users\you\project:/work` のようにドライブレターのコロンを含み、`-v` のパーサが

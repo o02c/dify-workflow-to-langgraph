@@ -46,10 +46,55 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [x] `.env` 探索を `usecwd=True` に（インストール後に作業ディレクトリの `.env` へ到達できるように）
 - [x] 依存検疫 — `[tool.uv] exclude-newer` で公開 3 日未満の版を採用しない（`make lock` が日付を更新）
 - [x] 未使用依存の削除 — `psycopg2-binary`（ADR-0006 の残骸）、`langchain` メタパッケージ
-- [ ] **Windows ホストでの実機検証** — Windows コンテナは Windows ホストでしか動かないため
-  開発環境（Linux daemon）では不可。文字コード周りは狭いコーデックを固定するテストで代替済みだが、
-  PowerShell の環境変数構文・`--mount` のドライブレター・Docker Desktop for Windows の
-  マウント所有者は実機でしか確認できない
+- [~] **Windows ホストでの実機検証** — `scripts/verify-windows.ps1` を用意（PowerShell 5.1 互換）。
+  macOS からは検証できない主張だけを対象にしている: コンソールのコードページ、PowerShell の
+  環境変数構文、パス区切り、`--mount` のドライブレター、Docker Desktop for Windows のマウント所有者。
+  出力のバイト一致は `make verify-digest`（macOS/Linux）と `-ExpectedDigest`（Windows）で突き合わせる
+  - [x] macOS 側の基準値と Linux コンテナ側の検証は完了（両者一致）
+  - [x] Windows 実機でのネイティブ CLI 検証（B/C/D 群）— **完了**。
+    Windows 11 ARM64 / PowerShell 5.1 / en-US / コードページ 437 で 8 項目パス
+    - 生成物が macOS・Linux コンテナとバイト一致（digest 68c3dd1f…）。OS をまたいだ
+      決定論が実機で裏付けられた（ADR-0001）
+    - 生成物の改行が LF（`newline="\n"` の修正が実機で効いている）
+    - `PYTHONUTF8` 未設定でも `\uXXXX` にエスケープされて落ちない
+    - バックスラッシュ／スラッシュ両方のパス区切りが通る
+    - この検証で USAGE.md 8.1 の記述漏れを発見（PowerShell の節に `chcp 65001` が
+      無く、`PYTHONUTF8=1` だけではコンソールで化ける）。修正済み
+  - [ ] Windows 実機での**生成物の実行**検証（F 群）— `scripts/run_generated.py` と
+    F1/F2/F3 を追加済み。グラフが実際に実行されたか（全ノード通過、End の値転送、
+    分岐が 1 つに解決、資格情報なしの knowledge-retrieval が `[]`）を最終状態の
+    JSON で確認する。macOS ではドライラン済み、Windows 実機はこれから
+  - [ ] **Git Bash 経路の検証** — 顧客環境には Git Bash があるため、PowerShell と並ぶ
+    実使用経路。`MSYS_NO_PATHCONV=1` と `$(pwd -W)` を使う形を USAGE.md 9.2 に書いたが
+    **実機未検証**。MSYS2 のパス変換は `target=/work` にも及ぶので、ここを外すと
+    マウント先が化ける。検証は `verify-windows.ps1` の bash 版を起こすか、
+    B/C 群をシェル非依存な形に切り出して両方から呼ぶ形が考えられる
+  - [ ] Windows 実機での Docker 検証（E 群）— **現状の手元環境では不可**。Docker Desktop for
+    Windows は WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は
+    Parallels Desktop の Pro / Business 版専用で、Standard 版では有効化できない。
+    実施するには Parallels のエディション変更か、別の Windows 実機が要る
+- [x] **変換時のプロバイダに google が無い** — `llm/google.py` を追加して解消。
+  あわせて `--llm-model` の既定をプロバイダ追随にした（`gpt-4o-mini` 固定だったため
+  `--llm-provider google` は 404、`anthropic` も同様に失敗していた）
+- [x] **`--llm-provider anthropic` が SDK 非互換で常に失敗していた** — anthropic 1.x が
+  `messages.create()` から `temperature` を削除したのに渡し続けており、
+  `unexpected keyword argument 'temperature'` で全呼び出しが落ちていた。宣言下限
+  `anthropic>=0.75.0` は受け付ける版と受け付けない版の両方を含むため、インストール版の
+  シグネチャを見て渡すか判断する形にした。検証スクリプトに `-LlmProvider` を足して
+  初めて表面化した（既定の自動選択は OpenAI を優先するため anthropic に到達しない）
+- [ ] **ワークフロー入力の所在が未定義** — 生成物を `invoke()` するとき、Start ノードが
+  宣言した変数をどこに置くのかが決まっていない。`GraphState` にトップレベルのキーは無く、
+  決定論版の Stub は入力を読まずに値を捏造するため問題が表面化しない。ADR-0004 は
+  非 End ノードへの入力配線を LLM 本体生成と共に来るものとして先送りしている。
+  結果、LLM が毎回推測し、`state["query"]` と `state["start_node"]["query"]` の間で
+  実行ごとに揺れる（Windows 実機の G2 で観測。3 回中 1 回が前者）。
+  しかも**前者は成立不能**で、LangGraph は `GraphState` のスキーマに無いキーを捨てるため、
+  呼び出し側が何を渡してもそのコードは動かない（実測確認済み）。ADR-0002 に従えば
+  後者が正だが、どこにも明示されておらず `generator/engine.py` のプロンプトも指示して
+  いない。住所を決めて、プロンプトと USAGE の実行例の両方に反映する必要がある
+- [ ] `generator/engine.py` のプロンプトが ADR-0007 以前のまま — `sys.path.insert` や
+  絶対 import（`from llm import ...`）を指示しており、生成される本体が自己完結
+  パッケージの形に反する。上記の入力住所の件と同じ箇所を直すことになる
 - [ ] 依存の下限バージョンを実態に合わせる — 例 `langchain-core>=0.3.0` に対し lock は 1.6.3。
   `uv.lock` 経由なら問題ないが、lock を使わない `pip install .` では古い版が入りうる
 - [ ] 変換ツール用と生成物用の依存の分離（optional extras）— `--auto-fix` が `templates/llm.py` を

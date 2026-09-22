@@ -1,9 +1,13 @@
 """Anthropic LLM provider."""
 
+import inspect
 import os
 
 import anthropic
+from anthropic.resources.messages import Messages
 from dotenv import find_dotenv, load_dotenv
+
+from dify2langgraph.logging_config import get_logger
 
 from .base import LLMConfig, LLMProvider, LLMResponse, Message
 
@@ -12,6 +16,14 @@ from .base import LLMConfig, LLMProvider, LLMResponse, Message
 # so the default file-relative search never reaches the user's .env.
 load_dotenv(find_dotenv(usecwd=True))
 
+logger = get_logger(__name__)
+
+# anthropic 1.x dropped temperature and top_p from messages.create(). The declared
+# floor (anthropic>=0.75.0) still admits versions that accept them, so ask the
+# installed SDK rather than assuming either shape -- passing temperature to 1.x
+# fails the whole call with "unexpected keyword argument 'temperature'".
+_CREATE_PARAMS = frozenset(inspect.signature(Messages.create).parameters)
+
 
 class AnthropicProvider(LLMProvider):
     """Anthropic LLM provider.
@@ -19,10 +31,9 @@ class AnthropicProvider(LLMProvider):
     Supports Claude models via Anthropic API directly.
 
     Example models:
-    - claude-sonnet-4-20250514
-    - claude-opus-4-20250514
-    - claude-3-5-sonnet-20241022
-    - claude-3-5-haiku-20241022
+    - claude-haiku-4-5-20251001
+    - claude-sonnet-5
+    - claude-opus-5
     """
 
     def __init__(
@@ -74,9 +85,24 @@ class AnthropicProvider(LLMProvider):
             "model": self.config.model,
             "messages": conversation,
             "max_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
-            **self.config.extra,
         }
+
+        if "temperature" in _CREATE_PARAMS:
+            kwargs["temperature"] = self.config.temperature
+
+        # extra is merged last so an explicit override still wins, then filtered:
+        # otherwise extra["temperature"] would sail past the guard above and hit
+        # the SDK anyway, which is the exact TypeError this detection exists for.
+        kwargs.update(self.config.extra)
+        dropped = [k for k in ("temperature", "top_p") if k in kwargs and k not in _CREATE_PARAMS]
+        for key in dropped:
+            del kwargs[key]
+        if dropped:
+            logger.debug(
+                "anthropic %s does not accept %s; sending without it",
+                anthropic.__version__,
+                ", ".join(dropped),
+            )
 
         if system_content:
             kwargs["system"] = system_content
