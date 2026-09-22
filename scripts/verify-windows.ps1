@@ -143,7 +143,11 @@ function Invoke-Native {
     } finally {
         if ($pushed) { Pop-Location }
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
-        if ($prevConsoleEnc) { try { [Console]::OutputEncoding = $prevConsoleEnc } catch {} }
+        if ($prevConsoleEnc) {
+            # Best effort. If the console refuses the restore there is nothing
+            # useful to do, and throwing here would mask the result being returned.
+            try { [Console]::OutputEncoding = $prevConsoleEnc } catch { $null = $_ }
+        }
         $ErrorActionPreference = $prevEap
     }
 }
@@ -343,6 +347,8 @@ function Invoke-Python {
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("d2l-verify-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 Copy-Item -LiteralPath $fixture -Destination $work
+Copy-Item -LiteralPath (Join-Parts $RepoRoot "tests" "fixtures" "simple_workflow.yml") `
+    -Destination $work -Force
 $digestPy = Join-Parts $RepoRoot "scripts" "output_digest.py"
 $genRoot = Join-Parts $work "out" "guardduty_handler"
 
@@ -446,8 +452,6 @@ if (-not $runtimeDepsOk) {
     try {
         # Give one node a Japanese return value, standing in for an implemented
         # body, so running the package has non-ASCII in the state it prints.
-        Copy-Item -LiteralPath (Join-Parts $RepoRoot "tests" "fixtures" "simple_workflow.yml") `
-            -Destination $work -Force
         $null = Invoke-Converter @("simple_workflow.yml", "-o", "run", "--skip-implement") $work
         $llmNode = Join-Parts $pkgParent "simple_workflow" "nodes" "llm_node.py"
         $src = [System.IO.File]::ReadAllText($llmNode, [System.Text.Encoding]::UTF8)
@@ -510,6 +514,97 @@ Invoke-Checked "D2" "No literal ANSI escape codes in captured output" {
     } else {
         Add-Result "D2" "No literal ANSI escape codes in captured output" "FAIL" `
             "ESC sequences present in captured (non-tty) output"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# F. Generated workflows actually run (ADR-0007)
+# ---------------------------------------------------------------------------
+Write-Host "`n=== F. Generated workflows run ===" -ForegroundColor Cyan
+
+# C only proves the package does not crash while printing. These check that the
+# graph really executed: which nodes were visited, which branch a Branching Node
+# resolved to, what the End Node forwarded. scripts/run_generated.py emits the
+# final state as ASCII-only JSON so it survives any console code page, and takes
+# no --initial argument here -- embedding JSON in a native command line is where
+# Windows PowerShell 5.1 argument quoting goes wrong.
+$runPy = Join-Parts $RepoRoot "scripts" "run_generated.py"
+$genDir = Join-Path $work "gen"
+
+function Get-StateJson {
+    <# Pull the state object out of a runner invocation, or $null. #>
+    param([pscustomobject]$Result)
+    if ($Result.ExitCode -ne 0) { return $null }
+    # The retriever logs a "not configured" warning to stderr, which 2>&1 merges
+    # in, so select the JSON line rather than assuming it is the last one.
+    $line = @($Result.Output -split "`n" |
+        Where-Object { $_.TrimStart().StartsWith("{") }) | Select-Object -Last 1
+    if (-not $line) { return $null }
+    try { return $line | ConvertFrom-Json } catch { return $null }
+}
+
+if (-not $runtimeDepsOk) {
+    Add-Result "F0" "Generated workflow execution" "SKIP" "langgraph is not importable"
+} else {
+    $null = Invoke-Converter @("simple_workflow.yml", "-o", $genDir, "--skip-implement") $work
+    $null = Invoke-Converter @("guardduty_handler.yml", "-o", $genDir, "--skip-implement") $work
+
+    Invoke-Checked "F1" "A generated linear workflow runs and visits every node" {
+        $r = Invoke-Python @($runPy, $genDir, "simple_workflow")
+        $state = Get-StateJson $r
+        if (-not $state) {
+            Add-Result "F1" "A generated linear workflow runs and visits every node" "FAIL" $r.Output
+            return
+        }
+        $names = @($state.PSObject.Properties.Name)
+        $missing = @(@("start_node", "llm_node", "end_node") | Where-Object { $names -notcontains $_ })
+        # The End Node forwards an upstream field rather than a placeholder (ADR-0004).
+        $forwarded = ($state.end_node.result -eq $state.llm_node.text)
+        if ($missing.Count -eq 0 -and $forwarded) {
+            Add-Result "F1" "A generated linear workflow runs and visits every node" "PASS" `
+                ("visited: " + ($names -join ", "))
+        } else {
+            Add-Result "F1" "A generated linear workflow runs and visits every node" "FAIL" `
+                ("missing: {0}; End forwarded upstream value: {1}" -f ($missing -join ","), $forwarded)
+        }
+    }
+
+    Invoke-Checked "F2" "A branching workflow resolves to exactly one branch (ADR-0003)" {
+        $r = Invoke-Python @($runPy, $genDir, "guardduty_handler")
+        $state = Get-StateJson $r
+        if (-not $state) {
+            Add-Result "F2" "A branching workflow resolves to exactly one branch (ADR-0003)" "FAIL" $r.Output
+            return
+        }
+        $names = @($state.PSObject.Properties.Name)
+        $ends = @("node_1722399235845", "node_1722399356175")
+        $reached = @($names | Where-Object { $ends -contains $_ })
+        # knowledge-retrieval calls the Retriever port; unconfigured it yields []
+        # so the graph still completes without Dify credentials (ADR-0006).
+        $retrieved = @($state."node_1722397470145".result)
+        if ($reached.Count -eq 1 -and $retrieved.Count -eq 0) {
+            Add-Result "F2" "A branching workflow resolves to exactly one branch (ADR-0003)" "PASS" `
+                ("reached {0}; knowledge-retrieval returned []" -f $reached[0])
+        } else {
+            Add-Result "F2" "A branching workflow resolves to exactly one branch (ADR-0003)" "FAIL" `
+                ("branches reached: {0}; retrieval items: {1}" -f $reached.Count, $retrieved.Count)
+        }
+    }
+
+    if ($useUv) {
+        Invoke-Checked "F3" "The end-to-end generated-workflow test suite passes" {
+            $r = Invoke-Native -Exe $uvExe -WorkDir $RepoRoot -Arguments @(
+                "run", "--project", $RepoRoot, "pytest", "tests/test_generated.py", "-q")
+            if ($r.ExitCode -eq 0) {
+                $summary = @($r.Output -split "`n" | Where-Object { $_ -match "passed" }) | Select-Object -Last 1
+                Add-Result "F3" "The end-to-end generated-workflow test suite passes" "PASS" $summary
+            } else {
+                Add-Result "F3" "The end-to-end generated-workflow test suite passes" "FAIL" $r.Output
+            }
+        }
+    } else {
+        Add-Result "F3" "The end-to-end generated-workflow test suite passes" "SKIP" `
+            "needs uv (pytest comes from the test dependency group)"
     }
 }
 

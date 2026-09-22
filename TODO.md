@@ -60,6 +60,10 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
     - バックスラッシュ／スラッシュ両方のパス区切りが通る
     - この検証で USAGE.md 8.1 の記述漏れを発見（PowerShell の節に `chcp 65001` が
       無く、`PYTHONUTF8=1` だけではコンソールで化ける）。修正済み
+  - [ ] Windows 実機での**生成物の実行**検証（F 群）— `scripts/run_generated.py` と
+    F1/F2/F3 を追加済み。グラフが実際に実行されたか（全ノード通過、End の値転送、
+    分岐が 1 つに解決、資格情報なしの knowledge-retrieval が `[]`）を最終状態の
+    JSON で確認する。macOS ではドライラン済み、Windows 実機はこれから
   - [ ] **Git Bash 経路の検証** — 顧客環境には Git Bash があるため、PowerShell と並ぶ
     実使用経路。`MSYS_NO_PATHCONV=1` と `$(pwd -W)` を使う形を USAGE.md 9.2 に書いたが
     **実機未検証**。MSYS2 のパス変換は `target=/work` にも及ぶので、ここを外すと

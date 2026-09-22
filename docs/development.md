@@ -101,6 +101,23 @@ script copies it to local disk before running anything -- Windows cannot give a
 native process a UNC working directory, so `uv.exe` would otherwise run against
 `C:\Windows`. Pass `-NoCopy` to override.
 
+The checks are grouped: **B** the converter runs, **C** console code page,
+**D** PowerShell environment variables, **E** Docker, **F** generated workflows
+actually execute. F is the one that matters to a customer -- it runs a generated
+package through `scripts/run_generated.py`, which prints the final GraphState as
+ASCII-only JSON, and asserts the graph really executed: every node visited, the
+End Node forwarding an upstream value (ADR-0004), a Branching Node resolving to
+exactly one successor (ADR-0003), and `knowledge-retrieval` returning `[]` without
+Dify credentials (ADR-0006). F3 additionally runs `tests/test_generated.py` on the
+Windows host.
+
+`run_generated.py` is useful on its own for inspecting a generated package:
+
+```bash
+python scripts/run_generated.py out my_workflow
+python scripts/run_generated.py out my_workflow --initial '{"start_node": {}}'
+```
+
 The script can be dry-run on macOS/Linux with PowerShell installed
 (`brew install powershell`), which exercises its whole control flow before it is
 handed to a Windows host:
