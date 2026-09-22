@@ -75,6 +75,11 @@ def _generate_and_run(output_dir: Path, fixture: str, initial: dict) -> dict:
         fixture: Fixture filename under tests/fixtures/.
         initial: Initial state passed to the compiled graph's invoke().
 
+    Args continued:
+        initial: must carry the workflow's declared inputs under the Start Node's
+            own state key -- the Start Node rejects missing required ones rather
+            than fabricating placeholders.
+
     Returns:
         The final GraphState after invocation (node key -> output dict).
     """
@@ -92,7 +97,7 @@ class TestGeneratedGraphRuns:
     def test_simple_workflow_runs(self, tmp_path):
         """A linear start -> llm -> end graph builds, invokes, and visits every node."""
         state = _generate_and_run(
-            tmp_path, "simple_workflow.yml", {"start_node": {}}
+            tmp_path, "simple_workflow.yml", {"start_node": {"query": "example"}}
         )
         assert sorted(state) == ["end_node", "llm_node", "start_node"]
 
@@ -127,6 +132,31 @@ class TestGeneratedGraphRuns:
         assert proc.returncode == 0, proc.stderr
         assert "\\u7ffb" in proc.stdout  # escaped, not crashed
 
+    def test_workflow_inputs_reach_the_graph(self, tmp_path):
+        """The caller's inputs survive the Start Node (ADR-0009).
+
+        They used to be overwritten: the Start Node emitted a Stub returning
+        {"query": "placeholder"}, so a generated workflow could not be given
+        inputs at all, whatever the caller passed.
+        """
+        state = _generate_and_run(
+            tmp_path, "simple_workflow.yml", {"start_node": {"query": "CALLER_VALUE"}}
+        )
+
+        assert state["start_node"]["query"] == "CALLER_VALUE"
+        # And it flows downstream: End forwards the LLM node's text (ADR-0004).
+        assert state["end_node"]["result"] == state["llm_node"]["text"]
+
+    def test_missing_required_input_fails_loudly(self, tmp_path):
+        """A required input that was never supplied must not be invented."""
+        translate(FIXTURES_DIR / "simple_workflow.yml", tmp_path / _PKG)
+        runner = Path(__file__).resolve().parents[1] / "scripts" / "run_generated.py"
+        proc = _run_python([str(runner), str(tmp_path), _PKG], tmp_path)
+
+        assert proc.returncode != 0
+        assert "missing required workflow input" in proc.stdout + proc.stderr
+        assert "query" in proc.stdout + proc.stderr
+
     def test_end_node_forwards_upstream_value(self, tmp_path):
         """The End node deterministically forwards an upstream field (ADR-0004).
 
@@ -134,14 +164,15 @@ class TestGeneratedGraphRuns:
         run the End output equals the LLM node's text rather than a placeholder.
         """
         state = _generate_and_run(
-            tmp_path, "simple_workflow.yml", {"start_node": {}}
+            tmp_path, "simple_workflow.yml", {"start_node": {"query": "example"}}
         )
         assert state["end_node"]["result"] == state["llm_node"]["text"]
 
     def test_guardduty_workflow_runs(self, tmp_path):
         """A branching workflow with RAG/tool nodes still builds and invokes."""
         state = _generate_and_run(
-            tmp_path, "guardduty_handler.yml", {"node_1722391426202": {}}
+            tmp_path, "guardduty_handler.yml",
+            {"node_1722391426202": {"finding": "f", "type": "t", "severity": 1.0}}
         )
         # Every node currently gets a stub, so invocation completes without error.
         assert "node_1722391426202" in state  # start
@@ -158,7 +189,8 @@ class TestGeneratedGraphRuns:
         successor instead of fanning out to every branch.
         """
         state = _generate_and_run(
-            tmp_path, "guardduty_handler.yml", {"node_1722391426202": {}}
+            tmp_path, "guardduty_handler.yml",
+            {"node_1722391426202": {"finding": "f", "type": "t", "severity": 1.0}}
         )
         # The two end nodes are the two branches of the classifier; only one
         # should be reached now that routing is correct.
@@ -172,7 +204,7 @@ class TestGeneratedGraphRuns:
         so the router resolves to a single successor instead of fanning out.
         """
         state = _generate_and_run(
-            tmp_path, "ifelse_workflow.yml", {"start_node": {}}
+            tmp_path, "ifelse_workflow.yml", {"start_node": {"query": "example"}}
         )
         ends = {"end_true", "end_false"}
         assert len(ends & set(state)) == 1
@@ -183,7 +215,17 @@ class TestRealWorkflows:
 
     def test_translation_workflow_routes_to_single_if_else_branch(self, tmp_path):
         """A real workflow with an if-else reaches exactly one branch target."""
-        state = _generate_and_run(tmp_path, "translation_workflow.yml", {})
+        state = _generate_and_run(
+            tmp_path,
+            "translation_workflow.yml",
+            {
+                "node_1721117927142": {
+                    "target_lang": "ja",
+                    "source_text": "hello",
+                    "source_lang": "en",
+                }
+            },
+        )
         # if-else 1721118545228: 'true' -> ...559807, 'false' -> ...668192.
         branches = {"node_1721118559807", "node_1721118668192"}
         assert len(branches & set(state)) == 1
@@ -194,5 +236,7 @@ class TestRealWorkflows:
         Iteration internals are stubbed via the fallback handler (ADR-0005 leaves
         the iteration shape open), but the graph must still compile and run.
         """
-        state = _generate_and_run(tmp_path, "json_translate.yml", {})
+        state = _generate_and_run(
+            tmp_path, "json_translate.yml", {"node_1731659178787": {"json_data": "{}"}}
+        )
         assert "node_1731659178787" in state  # start node ran

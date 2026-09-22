@@ -303,6 +303,45 @@ class TestSelfContainedPackage:
             assert "get_retriever().retrieve(" in kr
 
 
+class TestStartNodeInputContract:
+    """Where a workflow's inputs live is fixed by the generator, not guessed."""
+
+    def test_start_body_reads_the_callers_slot(self):
+        """ADR-0002 address, emitted deterministically rather than left to an LLM."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "start_node.py").read_text(encoding="utf-8")
+
+            assert 'supplied = state.get("start_node", {})' in body
+            assert 'supplied["query"]' in body
+            # No TODO marker: the LLM pass skips it, so it cannot invent an address.
+            assert "TODO: Implement" not in body
+
+    def test_main_supplies_the_declared_inputs(self):
+        """`python -m <pkg>` must still run, so the example carries real inputs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "guardduty_handler.yml", output_dir)
+
+            main = (output_dir / "__main__.py").read_text(encoding="utf-8")
+
+            assert '"finding": "example"' in main
+            assert '"severity": 0.0' in main  # number, not a string
+
+    def test_optional_inputs_get_defaults(self):
+        """Only required variables are enforced; optional ones fall back."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "translation_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1721117927142.py").read_text(encoding="utf-8")
+
+            assert 'supplied["source_text"]' in body  # required
+            assert 'supplied.get("country", "")' in body  # required: false
+
+
 class TestGeneratedOutputIsByteStableAcrossPlatforms:
     """The same DSL must produce the same bytes wherever the converter runs."""
 

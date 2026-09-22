@@ -16,6 +16,8 @@ Structural (type-agnostic) routing helpers -- deriving the branch map from the
 DSL ``sourceHandle`` -- live in :mod:`dify2langgraph.codegen.routing`.
 """
 
+from typing import Any
+
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.codegen.routing import default_branch_key
 from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
@@ -61,6 +63,27 @@ class NodeHandler:
         """Extra import lines the generated node body needs (e.g. the Retriever)."""
         return []
 
+    def body_prelude(
+        self,
+        node: NodeInfo,
+        graph: WorkflowGraph,
+        node_name_map: dict[str, tuple[str, str]] | None = None,
+    ) -> list[str]:
+        """Lines emitted inside the node body before the output dict.
+
+        Most node types need nothing here. The Start node uses it to pull the
+        caller's workflow inputs out of state and reject missing required ones.
+
+        Args:
+            node: The Node being generated.
+            graph: The parsed workflow, for resolving references.
+            node_name_map: Optional node_id -> (snake_case, CamelCase) mapping.
+
+        Returns:
+            Source lines, already indented to the function body.
+        """
+        return []
+
     def stub_output(
         self,
         node: NodeInfo,
@@ -79,17 +102,101 @@ class NodeHandler:
         }
 
 
+def start_variables(node: NodeInfo) -> list[dict[str, Any]]:
+    """Declared workflow input variables of a Start Node, in DSL order.
+
+    Args:
+        node: The Start Node.
+
+    Returns:
+        The variable declarations that have a name.
+    """
+    return [v for v in node.data.get("variables", []) if v.get("variable")]
+
+
+def start_input_example(node: NodeInfo) -> str:
+    """Python literal for an example workflow input dict.
+
+    The Start Node rejects missing required inputs, so the generated
+    ``__main__.py`` has to pass something for ``python -m <package>`` to remain a
+    working demonstration rather than an immediate ValueError.
+
+    Args:
+        node: The Start Node, or None-ish if the workflow has none.
+
+    Returns:
+        A dict literal such as ``{"query": "example"}``.
+    """
+    variables = start_variables(node)
+    if not variables:
+        return "{}"
+    pairs = []
+    for var in variables:
+        value = "0.0" if var.get("type") == "number" else '"example"'
+        pairs.append(f'"{var["variable"]}": {value}')
+    return "{" + ", ".join(pairs) + "}"
+
+
 class StartHandler(NodeHandler):
     node_type = "start"
+    # Deterministic: surfaces the caller's workflow inputs. It used to emit a
+    # Stub that returned {"query": "placeholder"}, which *overwrote* whatever the
+    # caller passed -- so a generated workflow could not be given inputs at all.
+    emits_stub_body = False
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
         fields: dict[str, str] = {}
-        for var in node.data.get("variables", []):
-            name = var.get("variable", "")
-            if not name:
-                continue
-            fields[name] = "float" if var.get("type") == "number" else "str"
+        for var in start_variables(node):
+            fields[var["variable"]] = "float" if var.get("type") == "number" else "str"
         return fields or {"inputs": "dict[str, Any]"}
+
+    def body_prelude(
+        self,
+        node: NodeInfo,
+        graph: WorkflowGraph,
+        node_name_map: dict[str, tuple[str, str]] | None = None,
+    ) -> list[str]:
+        key, _ = get_node_names(node.id, node_name_map)
+        required = [v["variable"] for v in start_variables(node) if v.get("required")]
+
+        lines = [
+            "    # Workflow inputs are supplied by the caller in this node's own",
+            "    # state slot (ADR-0002):",
+            f'    #     build_graph().invoke({{"{key}": {{...}}}})',
+            f'    supplied = state.get("{key}", {{}})',
+        ]
+        if required:
+            names = ", ".join(f'"{name}"' for name in required)
+            lines += [
+                "",
+                f"    missing = [name for name in ({names},) if name not in supplied]",
+                "    if missing:",
+                "        raise ValueError(",
+                f'            "{key} is missing required workflow input(s): "',
+                '            + ", ".join(missing)',
+                "        )",
+            ]
+        return lines
+
+    def stub_output(
+        self,
+        node: NodeInfo,
+        graph: WorkflowGraph,
+        node_name_map: dict[str, tuple[str, str]] | None = None,
+    ) -> dict[str, str]:
+        variables = start_variables(node)
+        if not variables:
+            return {"inputs": 'supplied.get("inputs", {})'}
+
+        result: dict[str, str] = {}
+        for var in variables:
+            name = var["variable"]
+            if var.get("required"):
+                result[name] = f'supplied["{name}"]'
+            else:
+                default = "0.0" if var.get("type") == "number" else '""'
+                result[name] = f'supplied.get("{name}", {default})'
+        return result
 
 
 class LlmHandler(NodeHandler):

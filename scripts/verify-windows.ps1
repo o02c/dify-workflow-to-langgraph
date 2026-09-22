@@ -74,7 +74,7 @@
     .\scripts\verify-windows.ps1
 
 .EXAMPLE
-    .\scripts\verify-windows.ps1 -ExpectedDigest 68c3dd1fab0887b4...
+    .\scripts\verify-windows.ps1 -ExpectedDigest 3ca50a8cf827c3af...
 #>
 [CmdletBinding()]
 param(
@@ -635,6 +635,25 @@ function Get-ErrorDetail {
     return (@($Output -split "`n" | Select-Object -Last 5)) -join "`n"
 }
 
+function New-InitialStateFile {
+    <#
+        .SYNOPSIS
+            Write a workflow's inputs to a JSON file and return its path.
+        .NOTES
+            A file rather than an inline argument: Windows PowerShell 5.1 mangles
+            embedded double quotes when handing arguments to a native process.
+
+            Generated workflows require their declared inputs under the Start
+            Node's own state key (ADR-0009). Passing nothing used to work only
+            because the Start Node fabricated placeholders, overwriting whatever
+            the caller supplied.
+    #>
+    param([string]$Name, [string]$Json)
+    $path = Join-Path $work "$Name.json"
+    [System.IO.File]::WriteAllText($path, $Json, (New-Object System.Text.UTF8Encoding $false))
+    return $path
+}
+
 function Get-StateJson {
     <# Pull the state object out of a runner invocation, or $null. #>
     param([pscustomobject]$Result)
@@ -654,10 +673,11 @@ if (-not $runtimeDepsOk) {
     $null = Invoke-Converter @("guardduty_handler.yml", "-o", $genDir, "--skip-implement") $work
 
     Invoke-Checked "F1" "A generated linear workflow runs and visits every node" {
-        $r = Invoke-Python @($runPy, $genDir, "simple_workflow")
+        $inputs = New-InitialStateFile "f1" '{"start_node": {"query": "example"}}'
+        $r = Invoke-Python @($runPy, $genDir, "simple_workflow", "--initial-file", $inputs)
         $state = Get-StateJson $r
         if (-not $state) {
-            Add-Result "F1" "A generated linear workflow runs and visits every node" "FAIL" $r.Output
+            Add-Result "F1" "A generated linear workflow runs and visits every node" "FAIL" (Get-ErrorDetail $r.Output)
             return
         }
         $names = @($state.PSObject.Properties.Name)
@@ -674,10 +694,12 @@ if (-not $runtimeDepsOk) {
     }
 
     Invoke-Checked "F2" "A branching workflow resolves to exactly one branch (ADR-0003)" {
-        $r = Invoke-Python @($runPy, $genDir, "guardduty_handler")
+        $inputs = New-InitialStateFile "f2" `
+            '{"node_1722391426202": {"finding": "f", "type": "t", "severity": 1.0}}'
+        $r = Invoke-Python @($runPy, $genDir, "guardduty_handler", "--initial-file", $inputs)
         $state = Get-StateJson $r
         if (-not $state) {
-            Add-Result "F2" "A branching workflow resolves to exactly one branch (ADR-0003)" "FAIL" $r.Output
+            Add-Result "F2" "A branching workflow resolves to exactly one branch (ADR-0003)" "FAIL" (Get-ErrorDetail $r.Output)
             return
         }
         $names = @($state.PSObject.Properties.Name)
@@ -841,16 +863,9 @@ if (-not $WithLlm) {
             # needs real input, unlike F1. Passed as a file because inline JSON
             # does not survive PowerShell's native-argument quoting.
             #
-            # Only the ADR-0002 shape can be supplied: LangGraph drops keys that
-            # are not in the GraphState schema, and GraphState has one key per
-            # node and nothing else. So when the LLM writes state["query"] -- which
-            # it does perhaps a third of the time, because nothing tells it where
-            # workflow inputs live -- the result cannot run no matter what the
-            # caller passes. That is tracked in TODO.md, not something to paper over.
-            $initialFile = Join-Path $work "initial.json"
-            [System.IO.File]::WriteAllText($initialFile,
-                '{"start_node": {"query": "hello"}}',
-                (New-Object System.Text.UTF8Encoding $false))
+            # The Start Node is deterministic now (ADR-0009), so the LLM never
+            # sees it and can no longer invent an address for the workflow inputs.
+            $initialFile = New-InitialStateFile "g2" '{"start_node": {"query": "hello"}}'
 
             $r = Invoke-Python @($runPy, $llmDir, "simple_workflow", "--initial-file", $initialFile)
             $state = Get-StateJson $r
@@ -913,7 +928,9 @@ if (-not $WithLlm) {
         if ($RuntimeLlmProvider) { $rtEnv["LLM_PROVIDER"] = $RuntimeLlmProvider }
         if ($RuntimeLlmModel) { $rtEnv["LLM_MODEL"] = $RuntimeLlmModel }
 
-        $r = Invoke-Python -PyArgs @($runPy, $rtDir, "simple_workflow") -EnvVars $rtEnv
+        $inputs = New-InitialStateFile "g3" '{"start_node": {"query": "example"}}'
+        $r = Invoke-Python -PyArgs @($runPy, $rtDir, "simple_workflow", "--initial-file", $inputs) `
+            -EnvVars $rtEnv
         $state = Get-StateJson $r
         if (-not $state) {
             Add-Result "G3" "A generated workflow calls a real model at run time" "FAIL" (Get-ErrorDetail $r.Output)
