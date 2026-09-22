@@ -858,13 +858,10 @@ if (-not $WithLlm) {
                 return
             }
 
-            # A stub Start Node returns a placeholder, but an implemented one reads
-            # its declared variables and raises when they are absent -- so this
-            # needs real input, unlike F1. Passed as a file because inline JSON
-            # does not survive PowerShell's native-argument quoting.
-            #
-            # The Start Node is deterministic now (ADR-0009), so the LLM never
-            # sees it and can no longer invent an address for the workflow inputs.
+            # The Start Node is deterministic (ADR-0009): it reads the caller's
+            # declared inputs and raises when a required one is absent, so this
+            # needs real input. The LLM never sees that node, so a failure here
+            # is a genuine break in an LLM-written body, not a guessed address.
             $initialFile = New-InitialStateFile "g2" '{"start_node": {"query": "hello"}}'
 
             $r = Invoke-Python @($runPy, $llmDir, "simple_workflow", "--initial-file", $initialFile)
@@ -872,15 +869,6 @@ if (-not $WithLlm) {
             if ($state) {
                 Add-Result "G2" "An LLM-implemented workflow runs" "PASS" `
                     ("final state keys: " + (@($state.PSObject.Properties.Name) -join ", "))
-            } elseif ($r.Output -match "start_node\.py" -and
-                      $r.Output -match "initial state|KeyError|not found") {
-                # Distinguish the known design gap from a new break. The Start
-                # Node's input address is undefined, so the model guesses and
-                # sometimes guesses something unsatisfiable. Reporting that as
-                # FAIL every third run would train the reader to ignore G2.
-                Add-Result "G2" "An LLM-implemented workflow runs" "SKIP" `
-                    ("the LLM guessed an unreachable address for the workflow input " +
-                     "(known gap: workflow input address is undefined -- see TODO.md)")
             } else {
                 # Any other run-time failure is a real result about the opt-in
                 # pass (ADR-0001), not a harness bug.

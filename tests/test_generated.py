@@ -73,12 +73,9 @@ def _generate_and_run(output_dir: Path, fixture: str, initial: dict) -> dict:
     Args:
         output_dir: Parent directory; the package is generated into ``output_dir/wf``.
         fixture: Fixture filename under tests/fixtures/.
-        initial: Initial state passed to the compiled graph's invoke().
-
-    Args continued:
-        initial: must carry the workflow's declared inputs under the Start Node's
-            own state key -- the Start Node rejects missing required ones rather
-            than fabricating placeholders.
+        initial: Initial state passed to the compiled graph's invoke(). Must
+            carry the workflow's declared inputs under the Start Node's own
+            state key; missing required ones raise rather than default.
 
     Returns:
         The final GraphState after invocation (node key -> output dict).

@@ -166,6 +166,8 @@ class TestEndDeterministicBody:
 
     def test_end_handler_marks_body_as_deterministic(self):
         assert get_handler("end").emits_stub_body is False
+        # Start is deterministic too (ADR-0009): it surfaces the caller's inputs.
+        assert get_handler("start").emits_stub_body is False
         assert get_handler("llm").emits_stub_body is True
 
 

@@ -53,7 +53,7 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   - [x] macOS 側の基準値と Linux コンテナ側の検証は完了（両者一致）
   - [x] Windows 実機でのネイティブ CLI 検証（B/C/D 群）— **完了**。
     Windows 11 ARM64 / PowerShell 5.1 / en-US / コードページ 437 で 8 項目パス
-    - 生成物が macOS・Linux コンテナとバイト一致（digest 3ca50a8c…）。OS をまたいだ
+    - 生成物が macOS・Linux コンテナとバイト一致。OS をまたいだ
       決定論が実機で裏付けられた（ADR-0001）
     - 生成物の改行が LF（`newline="\n"` の修正が実機で効いている）
     - `PYTHONUTF8` 未設定でも `\uXXXX` にエスケープされて落ちない
@@ -86,9 +86,9 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   呼び出し側の値を自分の state スロットから読む（従来の Stub は呼び出し側の値を
   上書きしており、そもそも入力を渡す手段が無かった）。必須入力の欠落は ValueError。
   TODO マーカーが消えたため LLM パスの対象外になり、住所を推測されることも無くなった
-- [x] `generator/engine.py` のプロンプトが ADR-0007 以前のまま — `sys.path.insert` や
+- [x] `generator/engine.py` のプロンプトを ADR-0007 に追随させた — 以前は `sys.path.insert` や
   絶対 import（`from llm import ...`）を指示しており、生成される本体が自己完結
-  パッケージの形に反する。上記の入力住所の件と同じ箇所を直すことになる
+  パッケージの形に反していた。Retriever の例も実 API と違っていた（ADR-0009 と同時に修正）
 - [ ] 依存の下限バージョンを実態に合わせる — 例 `langchain-core>=0.3.0` に対し lock は 1.6.3。
   `uv.lock` 経由なら問題ないが、lock を使わない `pip install .` では古い版が入りうる
 - [ ] 変換ツール用と生成物用の依存の分離（optional extras）— `--auto-fix` が `templates/llm.py` を

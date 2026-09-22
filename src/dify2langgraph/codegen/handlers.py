@@ -16,6 +16,7 @@ Structural (type-agnostic) routing helpers -- deriving the branch map from the
 DSL ``sourceHandle`` -- live in :mod:`dify2langgraph.codegen.routing`.
 """
 
+import json
 from typing import Any
 
 from dify2langgraph.codegen.naming import get_node_names
@@ -122,7 +123,7 @@ def start_input_example(node: NodeInfo) -> str:
     working demonstration rather than an immediate ValueError.
 
     Args:
-        node: The Start Node, or None-ish if the workflow has none.
+        node: The Start Node.
 
     Returns:
         A dict literal such as ``{"query": "example"}``.
@@ -132,8 +133,12 @@ def start_input_example(node: NodeInfo) -> str:
         return "{}"
     pairs = []
     for var in variables:
-        value = "0.0" if var.get("type") == "number" else '"example"'
-        pairs.append(f'"{var["variable"]}": {value}')
+        declared = var.get("default")
+        if declared is not None:
+            value = repr(declared)
+        else:
+            value = "0.0" if var.get("type") == "number" else '"example"'
+        pairs.append(f"{json.dumps(var['variable'])}: {value}")
     return "{" + ", ".join(pairs) + "}"
 
 
@@ -157,16 +162,22 @@ class StartHandler(NodeHandler):
         node_name_map: dict[str, tuple[str, str]] | None = None,
     ) -> list[str]:
         key, _ = get_node_names(node.id, node_name_map)
-        required = [v["variable"] for v in start_variables(node) if v.get("required")]
+        # A variable that declares a default always has a value to fall back on,
+        # so it is never "missing" even when the DSL marks it required.
+        required = [
+            v["variable"]
+            for v in start_variables(node)
+            if v.get("required") and v.get("default") is None
+        ]
 
         lines = [
             "    # Workflow inputs are supplied by the caller in this node's own",
             "    # state slot (ADR-0002):",
-            f'    #     build_graph().invoke({{"{key}": {{...}}}})',
-            f'    supplied = state.get("{key}", {{}})',
+            f'    #     build_graph().invoke({{{json.dumps(key)}: {{...}}}})',
+            f"    supplied = state.get({json.dumps(key)}, {{}})",
         ]
         if required:
-            names = ", ".join(f'"{name}"' for name in required)
+            names = ", ".join(json.dumps(name) for name in required)
             lines += [
                 "",
                 f"    missing = [name for name in ({names},) if name not in supplied]",
@@ -191,11 +202,17 @@ class StartHandler(NodeHandler):
         result: dict[str, str] = {}
         for var in variables:
             name = var["variable"]
-            if var.get("required"):
-                result[name] = f'supplied["{name}"]'
+            literal = json.dumps(name)
+            declared = var.get("default")
+            if declared is not None:
+                # The workflow author set this in Dify; honouring it is what makes
+                # the generated package behave like the original workflow.
+                result[name] = f"supplied.get({literal}, {declared!r})"
+            elif var.get("required"):
+                result[name] = f"supplied[{literal}]"
             else:
-                default = "0.0" if var.get("type") == "number" else '""'
-                result[name] = f'supplied.get("{name}", {default})'
+                fallback = "0.0" if var.get("type") == "number" else '""'
+                result[name] = f"supplied.get({literal}, {fallback})"
         return result
 
 

@@ -330,6 +330,50 @@ class TestStartNodeInputContract:
             assert '"finding": "example"' in main
             assert '"severity": 0.0' in main  # number, not a string
 
+    def _generate_with_start_variables(self, tmpdir: str, variables: list[dict]) -> str:
+        """Generate from simple_workflow with the Start Node's variables replaced."""
+        import yaml
+
+        dsl = yaml.safe_load((FIXTURES_DIR / "simple_workflow.yml").read_text(encoding="utf-8"))
+        for node in dsl["workflow"]["graph"]["nodes"]:
+            if node["data"].get("type") == "start":
+                node["data"]["variables"] = variables
+
+        source = Path(tmpdir) / "custom.yml"
+        source.write_text(yaml.dump(dsl), encoding="utf-8")
+        output_dir = Path(tmpdir) / "out"
+        translate(source, output_dir)
+        return (output_dir / "nodes" / "start_node.py").read_text(encoding="utf-8")
+
+    def test_dsl_default_is_honoured(self):
+        """A default set in Dify must survive into the generated fallback.
+
+        Falling back to "" instead would make the generated package behave
+        differently from the workflow it was converted from, silently.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            body = self._generate_with_start_variables(
+                tmpdir,
+                [{"variable": "lang", "type": "text-input", "required": False, "default": "en"}],
+            )
+
+            assert "supplied.get(\"lang\", 'en')" in body
+
+    def test_a_default_makes_a_required_variable_satisfiable(self):
+        """Required + default is not "missing": there is already a value to use."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            body = self._generate_with_start_variables(
+                tmpdir,
+                [
+                    {"variable": "query", "type": "text-input", "required": True},
+                    {"variable": "topk", "type": "number", "required": True, "default": 5},
+                ],
+            )
+
+            assert 'missing = [name for name in ("query",)' in body
+            assert "topk" not in body.split("missing = ")[1].split("]")[0]
+            assert 'supplied.get("topk", 5)' in body
+
     def test_optional_inputs_get_defaults(self):
         """Only required variables are enforced; optional ones fall back."""
         with tempfile.TemporaryDirectory() as tmpdir:
