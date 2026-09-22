@@ -108,8 +108,15 @@ function Invoke-Native {
         $saved[$k] = [Environment]::GetEnvironmentVariable($k)
         [Environment]::SetEnvironmentVariable($k, $EnvVars[$k])
     }
-    if ($WorkDir) { Push-Location -LiteralPath $WorkDir }
+    # Track whether the push actually happened. ErrorActionPreference is already
+    # "Continue" here, so a failed Push-Location would not throw -- and popping
+    # regardless would then unwind the *caller's* location instead.
+    $pushed = $false
     try {
+        if ($WorkDir) {
+            Push-Location -LiteralPath $WorkDir -ErrorAction Stop
+            $pushed = $true
+        }
         $lines = & $Exe @Arguments 2>&1 | ForEach-Object { $_.ToString() }
         return [pscustomobject]@{
             ExitCode = $LASTEXITCODE
@@ -118,7 +125,7 @@ function Invoke-Native {
     } catch {
         return [pscustomobject]@{ ExitCode = -1; Output = $_.Exception.Message }
     } finally {
-        if ($WorkDir) { Pop-Location }
+        if ($pushed) { Pop-Location }
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
         $ErrorActionPreference = $prevEap
     }
