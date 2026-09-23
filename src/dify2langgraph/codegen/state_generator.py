@@ -100,7 +100,7 @@ def generate_state_file(
         lines.append(f'    {func_name}: {class_name}  # {node.type}: {node.title}')
 
     if sys_fields:
-        lines.append("    sys: SysInputs  # reserved: Dify system variables (ADR-0004)")
+        lines.append('    sys: SysInputs  # Dify sys.*: the caller passes these to invoke()')
 
     content = "\n".join(lines) + "\n"
     output_path = output_dir / "state.py"

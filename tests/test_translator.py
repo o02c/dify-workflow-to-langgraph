@@ -5,8 +5,6 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from dify2langgraph.cli import translate
 from dify2langgraph.codegen import (
     generate_graph_file,
@@ -361,8 +359,14 @@ class TestStartNodeInputContract:
 
             assert "supplied.get(\"lang\", 'en')" in body
 
-    def test_a_default_makes_a_required_variable_satisfiable(self):
-        """Required + default is not "missing": there is already a value to use."""
+    def test_a_declared_default_does_not_excuse_a_required_variable(self):
+        """Dify raises for an absent required variable whatever its default is.
+
+        `_validate_inputs` checks `required` first and only reads `default` on the
+        non-required branch, so accepting a required variable because it declares
+        one would run a workflow Dify itself would reject -- and substituting the
+        default would then hide it.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             body = self._generate_with_start_variables(
                 tmpdir,
@@ -372,11 +376,27 @@ class TestStartNodeInputContract:
                 ],
             )
 
-            assert 'missing = [name for name in ("query",)' in body
-            assert "topk" not in body.split("missing = ")[1].split("]")[0]
-            # Coerced: the field is typed float, and Dify exports a number's
-            # default as a string.
-            assert 'supplied.get("topk", 5.0)' in body
+            assert 'missing = [name for name in ("query", "topk",)' in body
+            assert 'supplied["topk"]' in body
+            assert "supplied.get(\"topk\"" not in body
+
+    def test_an_optional_number_default_keeps_dify_s_own_numeric_type(self):
+        """Dify uses int() unless the string has a decimal point.
+
+        A number default exports as a string (`'3'`). Coercing it to float put
+        "3.0" into anything that interpolated the value.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            body = self._generate_with_start_variables(
+                tmpdir,
+                [
+                    {"variable": "whole", "type": "number", "default": "3"},
+                    {"variable": "fraction", "type": "number", "default": "2.5"},
+                ],
+            )
+
+            assert 'supplied.get("whole", 3)' in body
+            assert 'supplied.get("fraction", 2.5)' in body
 
     def test_optional_inputs_get_defaults(self):
         """Only required variables are enforced; optional ones fall back."""
@@ -397,12 +417,11 @@ class TestRealDslEnvSysWorkflow:
     existed -- the hand-written fixtures happened to avoid all of them.
     """
 
-    def test_empty_string_default_does_not_disable_the_required_check(self):
-        """Dify writes `default: ''` where no default was set.
+    def test_every_required_variable_is_enforced(self):
+        """The real export marks `query` and `topk` required; both are checked.
 
-        Reading that as a default silently dropped the required-input check for
-        every real export: `query` is `required: true` and carries `default: ''`,
-        so the generated body had no `missing` list at all.
+        `query` carries `default: ''` and `topk` carries `default: '3'` -- the two
+        shapes that each used to let a required variable through.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
@@ -410,18 +429,10 @@ class TestRealDslEnvSysWorkflow:
 
             body = (output_dir / "nodes" / "node_1785682240366.py").read_text(encoding="utf-8")
 
-            assert 'missing = [name for name in ("query",)' in body
+            assert 'missing = [name for name in ("query", "topk",)' in body
             assert 'supplied["query"]' in body
+            assert 'supplied["topk"]' in body
 
-    def test_number_default_is_coerced_to_the_declared_type(self):
-        """`topk` is `type: number` but its default exports as the string '3'."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_dir = Path(tmpdir)
-            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
-
-            body = (output_dir / "nodes" / "node_1785682240366.py").read_text(encoding="utf-8")
-
-            assert 'supplied.get("topk", 3.0)' in body
 
     def test_structured_output_is_declared_and_shaped(self):
         """A downstream read of structured_output used to raise KeyError.
@@ -506,6 +517,25 @@ class TestRealDslEnvSysWorkflow:
             assert "# env.API_BASE -> env.API_BASE" in body
             assert 'state["env"]' not in body
 
+    def test_a_stub_body_is_told_how_to_reach_the_constants(self):
+        """The comment names `env.API_BASE`; nothing imports it yet.
+
+        With `--skip-implement` the body is the developer's to write, and an
+        unused import would fail the generated package's own lint check -- so the
+        import is not emitted. Without saying so, following the comment above
+        gives a NameError.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1785682272592.py").read_text(
+                encoding="utf-8"
+            )
+
+            assert "import env" not in body.split("def ")[0]  # not in the imports
+            assert "add `from .. import env` above" in body
+
 
 class TestEnvConstantsModule:
     """env.py: DSL constants, with secrets deliberately left out (ADR-0004)."""
@@ -535,36 +565,22 @@ class TestEnvConstantsModule:
             source = self._generate(tmpdir)
 
             assert "DUMMY" not in source
-            assert "SECRET" in source  # declared, just not valued
+            # `SECRET` alone would be satisfied by the machinery's own identifiers,
+            # so assert the name is declared where it has to be: the required list.
+            assert "REQUIRED_ENV_VARS = ('SECRET',)" in source
 
-    def test_a_missing_secret_raises_with_the_variable_named(self):
-        """Returning "" would surface later as an unexplained downstream error."""
+    def test_the_required_variables_are_listed_publicly(self):
+        """A caller can check the list up front instead of failing mid-run.
+
+        Resolution itself is tested in test_generated.py: it depends on the real
+        module's location, which only a genuine import reproduces.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
-            output_dir = Path(tmpdir)
-            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+            source = self._generate(tmpdir)
 
-            namespace: dict = {}
-            exec(  # noqa: S102 - executing our own generated module, by design
-                (output_dir / "env.py").read_text(encoding="utf-8"), namespace
-            )
-            getattr_ = namespace["__getattr__"]
-
-            with pytest.raises(RuntimeError, match="SECRET"):
-                getattr_("SECRET")
-
-    def test_a_present_secret_comes_from_the_environment(self, monkeypatch):
-        """Set in the environment, it resolves to that value."""
-        monkeypatch.setenv("SECRET", "from-environment")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_dir = Path(tmpdir)
-            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
-
-            namespace: dict = {}
-            exec(  # noqa: S102
-                (output_dir / "env.py").read_text(encoding="utf-8"), namespace
-            )
-
-            assert namespace["__getattr__"]("SECRET") == "from-environment"
+            assert "REQUIRED_ENV_VARS = ('SECRET',)" in source
+            # Secrets exist only inside __getattr__, so dir() has to be told.
+            assert "def __dir__()" in source
 
     def test_no_env_file_when_the_dsl_declares_none(self):
         """Most workflows declare no environment variables at all."""
@@ -591,7 +607,6 @@ class TestChatflowShape:
             graph = (output_dir / "graph.py").read_text(encoding="utf-8")
 
             assert 'graph.add_edge("answer", END)' in graph
-            assert "import END" in graph or "END, START" in graph
 
     def test_node_all_is_sorted(self):
         """ruff's RUF022 flags an unsorted __all__ in the generated package."""

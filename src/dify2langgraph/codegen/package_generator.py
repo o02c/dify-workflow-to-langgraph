@@ -13,7 +13,7 @@ from pathlib import Path
 from dify2langgraph.codegen.handlers import (
     referenced_sys_fields,
     start_input_example,
-    sys_field_type,
+    sys_field_example,
 )
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.logging_config import get_logger
@@ -63,8 +63,7 @@ def generate_package_files(
     sys_fields = referenced_sys_fields(graph)
     if sys_fields:
         sys_pairs = ", ".join(
-            f'"{name}": ' + ("[]" if sys_field_type(name).startswith("list") else '"example"')
-            for name in sys_fields
+            f'"{name}": {sys_field_example(name)}' for name in sys_fields
         )
         sys_entry = f', "sys": {{{sys_pairs}}}'
     else:

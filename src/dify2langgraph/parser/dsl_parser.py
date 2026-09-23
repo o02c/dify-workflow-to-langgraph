@@ -11,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from dify2langgraph.env_vars import usable_variables
 from dify2langgraph.naming import sanitize_function_name
 
 # Pattern to match Dify variable references: {{#node_id.field#}} or {{#node_id.field.subfield#}}
@@ -200,11 +201,13 @@ class DifyDSLParser:
             edges=edges,
             start_node_id=start_node_id,
             end_node_ids=end_node_ids,
-            environment_variables=[
-                var
-                for var in workflow_data.get("environment_variables") or []
-                if var.get("name")
-            ],
+            # Filtered once, here, so every generator downstream agrees on which
+            # variables exist: a name that is a Python keyword or a non-secret
+            # with no value cannot be emitted, and a generator that disagreed
+            # about that produced an unimportable package.
+            environment_variables=usable_variables(
+                workflow_data.get("environment_variables") or []
+            ),
         )
 
     def _parse_node(self, node_data: dict[str, Any]) -> NodeInfo:

@@ -9,6 +9,9 @@ from pathlib import Path
 from dify2langgraph.codegen.handlers import (
     get_handler,
     reference_access,
+    referenced_sys_fields_for,
+    resolvable_env_references,
+    sys_prelude,
 )
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.logging_config import get_logger
@@ -103,9 +106,25 @@ def _generate_node_file(
     # the Stub never uses is a lint failure in the generated package.
     body_prelude = handler.body_prelude(node, graph, node_name_map)
     body_output = handler.stub_output(node, graph, node_name_map)
-    uses_env = any(
-        "env." in line for line in (*body_prelude, *body_output.values())
-    )
+
+    # Guard the caller-supplied sys.* this body reads, for the same reason the
+    # Start Node guards its workflow inputs. Only for a deterministic body: a Stub
+    # does not read them yet, and rejecting an input nothing consumes would be
+    # stricter than the workflow.
+    if not handler.emits_stub_body:
+        guard = sys_prelude(referenced_sys_fields_for(node))
+        if guard:
+            body_prelude = [*guard, *(["", *body_prelude] if body_prelude else [])]
+
+    # Which env.* references this node can actually reach. Filtered against the
+    # DSL's own declarations because env.py only contains what the DSL declares
+    # -- and is not generated at all when it declares nothing, so importing it
+    # on the strength of a reference alone breaks the whole package rather than
+    # the one reference. The body reads them only when it is deterministic; a
+    # Stub body just documents them, and an unused import fails the generated
+    # package's own lint check.
+    env_refs = resolvable_env_references(node, graph)
+    uses_env = bool(env_refs) and not handler.emits_stub_body
 
     local_imports = [
         "from ..state import " + ", ".join(sorted(["GraphState", class_name])),
@@ -157,6 +176,12 @@ def _generate_node_file(
         lines.append("    # How to access input variables:")
         for ref in node.references:
             lines.append(f"    # {ref.raw} -> {reference_access(ref, node_name_map)}")
+        if env_refs and not uses_env:
+            # The comment above names `env.X`, which resolves to nothing until the
+            # module is imported. Say so here rather than leaving a NameError for
+            # whoever fills the body in.
+            lines.append("    # env.* are module constants: add `from .. import env` above")
+            lines.append("    # when your implementation reads them.")
         lines.append("")
 
     # Generate the node body. The handler owns the output values: most types emit

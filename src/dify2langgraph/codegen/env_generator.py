@@ -12,12 +12,11 @@ first access, and a missing one raises with the variable named.
 
 from pathlib import Path
 
+from dify2langgraph.codegen.env_vars import SECRET_VALUE_TYPE
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import WorkflowGraph
 
 logger = get_logger(__name__)
-
-SECRET_VALUE_TYPE = "secret"
 
 
 def generate_env_file(graph: WorkflowGraph, output_dir: Path) -> bool:
@@ -30,6 +29,7 @@ def generate_env_file(graph: WorkflowGraph, output_dir: Path) -> bool:
     Returns:
         True if a file was written, False when the DSL declares none.
     """
+    # Already filtered by the parser to what can be emitted (see env_vars).
     variables = graph.environment_variables
     if not variables:
         return False
@@ -51,11 +51,22 @@ def generate_env_file(graph: WorkflowGraph, output_dir: Path) -> bool:
     ]
 
     if secrets:
-        lines += ["import os", "from typing import TYPE_CHECKING", ""]
+        lines += [
+            "import os",
+            "from typing import TYPE_CHECKING",
+            "",
+            "from dotenv import find_dotenv, load_dotenv",
+            "",
+        ]
 
     for var in constants:
-        # repr covers the observed value_types -- string, integer -- and anything
-        # else Dify adds that is a plain scalar.
+        # repr covers every value_type Dify's variable factory accepts: string,
+        # number, integer, float, boolean, object, array[string|number|object|
+        # boolean] and `llm`. Not all of them are scalars -- an `object` or
+        # `array[*]` becomes a mutable module-level constant, and an `llm`
+        # variable becomes the raw {provider, name, mode, completion_params} dict
+        # rather than a resolved model. Both are faithful to the DSL; neither is
+        # interpreted further.
         lines.append(f"{var['name']} = {var['value']!r}  # value_type: {var.get('value_type')}")
     if constants:
         lines.append("")
@@ -65,8 +76,16 @@ def generate_env_file(graph: WorkflowGraph, output_dir: Path) -> bool:
         trailing = "," if len(secrets) == 1 else ""
         lines += [
             "# Declared as `secret` in the DSL: supplied through the environment at",
-            "# run time rather than baked in here.",
-            f"_SECRETS = ({names}{trailing})",
+            "# run time rather than baked in here. Every name listed must be set",
+            "# before the workflow runs. Public on purpose -- a caller can check the",
+            "# list up front instead of discovering a missing one mid-run.",
+            f"REQUIRED_ENV_VARS = ({names}{trailing})",
+            "",
+            "# Read a .env before any secret is resolved. Without this, a secret written",
+            "# to .env resolved only if llm.py -- which also calls load_dotenv -- happened",
+            "# to be imported first, so the same .env worked or failed depending on import",
+            "# order. Exported variables still win: load_dotenv does not override them.",
+            "load_dotenv(find_dotenv())",
             "",
             "if TYPE_CHECKING:  # resolved at run time by __getattr__ below",
         ]
@@ -75,7 +94,7 @@ def generate_env_file(graph: WorkflowGraph, output_dir: Path) -> bool:
             "",
             "",
             "def __getattr__(name: str) -> str:",
-            '    """Resolve a secret from the environment on first access (PEP 562).',
+            '    """Resolve a secret from the environment when it is read (PEP 562).',
             "",
             "    Args:",
             "        name: The attribute being read.",
@@ -85,12 +104,12 @@ def generate_env_file(graph: WorkflowGraph, output_dir: Path) -> bool:
             "",
             "    Raises:",
             "        RuntimeError: If the workflow declares the secret but the",
-            "            environment does not set it. Failing here names the variable;",
-            "            an empty string would surface later as an unexplained error",
-            "            from whatever consumed it.",
+            "            environment leaves it unset or empty. Failing here names",
+            "            the variable; passing an empty credential on would surface",
+            "            later as an unexplained error from whatever consumed it.",
             "        AttributeError: For any other attribute.",
             '    """',
-            "    if name in _SECRETS:",
+            "    if name in REQUIRED_ENV_VARS:",
             "        value = os.environ.get(name)",
             "        if not value:",
             "            raise RuntimeError(",
@@ -99,6 +118,17 @@ def generate_env_file(graph: WorkflowGraph, output_dir: Path) -> bool:
             "            )",
             "        return value",
             '    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")',
+            "",
+            "",
+            "def __dir__() -> list[str]:",
+            '    """List the secrets alongside the constants (PEP 562).',
+            "",
+            "    Returns:",
+            "        Every name this module exposes. Without this, the secrets are",
+            "        invisible to ``dir()`` and to interactive completion, because",
+            "        they exist only inside __getattr__.",
+            '    """',
+            "    return sorted({*globals(), *REQUIRED_ENV_VARS})",
         ]
 
     content = "\n".join(lines).rstrip("\n") + "\n"
