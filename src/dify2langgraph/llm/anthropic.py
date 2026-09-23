@@ -19,9 +19,11 @@ load_dotenv(find_dotenv(usecwd=True))
 logger = get_logger(__name__)
 
 # anthropic 1.x dropped temperature and top_p from messages.create(). The declared
-# floor (anthropic>=0.75.0) still admits versions that accept them, so ask the
-# installed SDK rather than assuming either shape -- passing temperature to 1.x
-# fails the whole call with "unexpected keyword argument 'temperature'".
+# floor now sits at a 1.x release, so a conforming install never accepts them --
+# but the probe stays: passing temperature to an SDK that rejects it fails the
+# whole call with "unexpected keyword argument 'temperature'", and that is too
+# cheap to guard against to rely on the floor holding, or on the parameter never
+# coming back.
 _CREATE_PARAMS = frozenset(inspect.signature(Messages.create).parameters)
 
 

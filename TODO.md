@@ -60,10 +60,10 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
     - バックスラッシュ／スラッシュ両方のパス区切りが通る
     - この検証で USAGE.md 8.1 の記述漏れを発見（PowerShell の節に `chcp 65001` が
       無く、`PYTHONUTF8=1` だけではコンソールで化ける）。修正済み
-  - [ ] Windows 実機での**生成物の実行**検証（F 群）— `scripts/run_generated.py` と
-    F1/F2/F3 を追加済み。グラフが実際に実行されたか（全ノード通過、End の値転送、
-    分岐が 1 つに解決、資格情報なしの knowledge-retrieval が `[]`）を最終状態の
-    JSON で確認する。macOS ではドライラン済み、Windows 実機はこれから
+  - [x] Windows 実機での**生成物の実行**検証（F 群）— 完了。`scripts/run_generated.py` で
+    最終 GraphState を JSON に落とし、全ノード通過・End の値転送・分岐が 1 つに解決・
+    資格情報なしの knowledge-retrieval が `[]` を確認。PowerShell と Git Bash の
+    両経路で通過
   - [ ] **Git Bash 経路の検証** — 顧客環境には Git Bash があるため、PowerShell と並ぶ
     実使用経路。`MSYS_NO_PATHCONV=1` と `$(pwd -W)` を使う形を USAGE.md 9.2 に書いたが
     **実機未検証**。MSYS2 のパス変換は `target=/work` にも及ぶので、ここを外すと
@@ -89,8 +89,11 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [x] `generator/engine.py` のプロンプトを ADR-0007 に追随させた — 以前は `sys.path.insert` や
   絶対 import（`from llm import ...`）を指示しており、生成される本体が自己完結
   パッケージの形に反していた。Retriever の例も実 API と違っていた（ADR-0009 と同時に修正）
-- [ ] 依存の下限バージョンを実態に合わせる — 例 `langchain-core>=0.3.0` に対し lock は 1.6.3。
-  `uv.lock` 経由なら問題ないが、lock を使わない `pip install .` では古い版が入りうる
+- [x] 依存の下限バージョンを実態に合わせた — 15 件が lock より低い下限を宣言しており、
+  うち 7 件はメジャーが 1 つ以上違った（`langchain-core>=0.3.0` に対し lock は 1.6.3 など）。
+  `uv sync` は lock どおり入れるので開発中は見えず、USAGE 2 章が主経路として案内している
+  `pip install .` でだけ古い版が入りうる状態だった。下限を lock の版に引き上げ、
+  `tests/test_packaging.py` で再発を検出する（lock を上げて pyproject を忘れると落ちる）
 - [ ] 変換ツール用と生成物用の依存の分離（optional extras）— `--auto-fix` が `templates/llm.py` を
   再利用する関係で現状は混在。分離すると顧客のインストール手順が変わるため保留（docs/tech-stack.md 参照）
 
