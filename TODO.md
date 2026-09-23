@@ -104,7 +104,17 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 ## Deferred（要調査 / 後続）
 
 - [ ] iteration（ループ）— ループ全体が 1 ノードで内部にサブグラフを持つ表現。実 DSL 調査後に Handler 形状を決定（ADR-0005 参照）
-- [ ] `sys.*` / `env.*` の実装（住所は ADR-0004 で予約済み、実装は後追い）
+- [ ] `sys.*` / `env.*` の実装（置き場所は ADR-0004 で決定済み、実装は後追い）。
+  実 DSL（`env_sys_workflow.yml`）で以下が判明したので、実装前に判断が要る
+  - `value_type: secret` の環境変数は**値が平文でエクスポートされる**。生成した
+    `env.py` の定数にすると、顧客がコミットするソースに資格情報が入る。string /
+    integer と同じ扱いにはできない
+  - パーサは `{{#env.API_BASE#}}` を `state["env"]["API_BASE"]` に正規化しており、
+    ADR-0004 の「env は state の外の定数」と矛盾する。`GraphState` に `env` キーは
+    無いので解決できない。テンプレート経路と ADR のどちらかを動かす必要がある
+  - `mode: workflow` の `sys.*` は `[sys, app_id]` / `[sys, user_id]` として現れ、
+    `sys.query` は出ない（chatflow 専用）。ADR-0004 が前提にしている sys の構成
+    （query/files/user_id）はモード依存
 - [ ] `conversation.*`（chatflow 専用、対象外）
 - [ ] 埋め込みモデル自動解決 — API 経由で不要化の見込みだが、別バックエンド採用時に再検討
 - [~] Retriever に検索設定を転送（ADR-0006、実 Dify 1.16.1 で検証）

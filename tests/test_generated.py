@@ -210,6 +210,29 @@ class TestGeneratedGraphRuns:
 class TestRealWorkflows:
     """End-to-end runs against real Dify workflow exports (see fixtures/SOURCES.md)."""
 
+    def test_env_sys_workflow_runs(self, tmp_path):
+        """A real export using structured output and sys.* builds and invokes.
+
+        Before structured_output was declared, this raised
+        KeyError: 'structured_output' the moment the End node read through it.
+        """
+        state = _generate_and_run(
+            tmp_path,
+            "env_sys_workflow.yml",
+            {"node_1785682240366": {"query": "hello", "topk": 5.0}},
+        )
+
+        # The caller's value survives, and the declared defaults fill the rest.
+        assert state["node_1785682240366"]["query"] == "hello"
+        assert state["node_1785682240366"]["lang"] == "en"
+        # structured_output is shaped from the schema, so End resolves through it.
+        assert state["node_1785682317200"]["random_number"] == 0.0
+        # sys.* has no home yet (ADR-0004).
+        assert state["node_1785682317200"]["app_id"] is None
+
+
+    """End-to-end runs against real Dify workflow exports (see fixtures/SOURCES.md)."""
+
     def test_translation_workflow_routes_to_single_if_else_branch(self, tmp_path):
         """A real workflow with an if-else reaches exactly one branch target."""
         state = _generate_and_run(

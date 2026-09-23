@@ -372,7 +372,9 @@ class TestStartNodeInputContract:
 
             assert 'missing = [name for name in ("query",)' in body
             assert "topk" not in body.split("missing = ")[1].split("]")[0]
-            assert 'supplied.get("topk", 5)' in body
+            # Coerced: the field is typed float, and Dify exports a number's
+            # default as a string.
+            assert 'supplied.get("topk", 5.0)' in body
 
     def test_optional_inputs_get_defaults(self):
         """Only required variables are enforced; optional ones fall back."""
@@ -384,6 +386,72 @@ class TestStartNodeInputContract:
 
             assert 'supplied["source_text"]' in body  # required
             assert 'supplied.get("country", "")' in body  # required: false
+
+
+class TestRealDslEnvSysWorkflow:
+    """Shapes pinned down by env_sys_workflow.yml, built in Dify Cloud.
+
+    Every assertion here failed against the real export before this fixture
+    existed -- the hand-written fixtures happened to avoid all of them.
+    """
+
+    def test_empty_string_default_does_not_disable_the_required_check(self):
+        """Dify writes `default: ''` where no default was set.
+
+        Reading that as a default silently dropped the required-input check for
+        every real export: `query` is `required: true` and carries `default: ''`,
+        so the generated body had no `missing` list at all.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1785682240366.py").read_text(encoding="utf-8")
+
+            assert 'missing = [name for name in ("query",)' in body
+            assert 'supplied["query"]' in body
+
+    def test_number_default_is_coerced_to_the_declared_type(self):
+        """`topk` is `type: number` but its default exports as the string '3'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1785682240366.py").read_text(encoding="utf-8")
+
+            assert 'supplied.get("topk", 3.0)' in body
+
+    def test_structured_output_is_declared_and_shaped(self):
+        """A downstream read of structured_output used to raise KeyError.
+
+        The End node forwards `[<llm>, "structured_output", "random_number"]`, but
+        the LLM handler declared only text/usage, so the generated package crashed
+        at run time on any workflow using structured output.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            state = (output_dir / "state.py").read_text(encoding="utf-8")
+            body = (output_dir / "nodes" / "node_1785682272592.py").read_text(encoding="utf-8")
+
+            assert "structured_output: dict[str, Any]" in state
+            # Shaped from the DSL's own schema, so a downstream read resolves.
+            assert '"answer": "placeholder"' in body
+            assert '"random_number": 0.0' in body
+
+    def test_sys_selector_still_falls_back(self):
+        """`[sys, app_id]` has no home yet (ADR-0004), so it must not pretend to.
+
+        Documents the current deferral rather than asserting it is correct.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1785682317200.py").read_text(encoding="utf-8")
+
+            assert '"app_id": None' in body
 
 
 class TestGeneratedOutputIsByteStableAcrossPlatforms:

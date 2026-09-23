@@ -34,3 +34,24 @@ cover this.
 
 Still deferred: `sys.*` / `env.*` homes, `{{#context#}}` resolution, and wiring normalized
 inputs into non-End node bodies (arrives with LLM opt-in body generation, ADR-0001).
+
+## Findings from a real export (`tests/fixtures/env_sys_workflow.yml`)
+
+Built in Dify Cloud specifically to pin these shapes down. Three things it shows
+that change what "env as module constants" can mean:
+
+- **A `value_type: secret` environment variable exports its value in plaintext.**
+  Emitting it as a module constant in a generated `env.py` would write a credential
+  into source the customer then commits. Whatever the implementation does, secrets
+  cannot be treated like the string and integer cases.
+- **`value_type` is `string` / `integer` / `secret`**, not Python type names, and an
+  `integer` value arrives as an actual int while a `number` Start default arrives as
+  a string. Neither can be passed through untyped.
+- **The parser currently normalizes `{{#env.API_BASE#}}` to `state["env"]["API_BASE"]`**,
+  which contradicts the decision above -- `env` is specified as constants *outside*
+  state, and `GraphState` has no `env` key, so that access cannot resolve. The
+  template-string path and this ADR disagree and one of them has to move.
+
+`sys.*` in `mode: workflow` appears as `[sys, app_id]` / `[sys, user_id]` in End
+outputs; `sys.query` did not appear (it is a chatflow variable), so the `sys`
+membership this ADR assumes -- query/files/user_id -- is mode-dependent.

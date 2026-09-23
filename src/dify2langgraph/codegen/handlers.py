@@ -103,6 +103,34 @@ class NodeHandler:
         }
 
 
+def declared_default(var: dict[str, Any]) -> str | None:
+    """A Start variable's declared default as a Python literal, or None.
+
+    Dify writes ``default: ''`` for a field where the author set no default, so an
+    empty string means absence. Treating it as a default silently disabled the
+    required-input check for every real export -- a `required: true` paragraph
+    always carries `default: ''`.
+
+    A ``number`` variable's default arrives as a string (``'3'``) while the
+    generated field is typed ``float``, so it is coerced rather than emitted as-is.
+
+    Args:
+        var: One entry of the Start Node's ``variables``.
+
+    Returns:
+        A Python literal, or None when the variable has no usable default.
+    """
+    raw = var.get("default")
+    if raw is None or raw == "":
+        return None
+    if var.get("type") == "number":
+        try:
+            return repr(float(raw))
+        except (TypeError, ValueError):
+            return None
+    return repr(raw)
+
+
 def start_variables(node: NodeInfo) -> list[dict[str, Any]]:
     """Declared workflow input variables of a Start Node, in DSL order.
 
@@ -133,10 +161,8 @@ def start_input_example(node: NodeInfo) -> str:
         return "{}"
     pairs = []
     for var in variables:
-        declared = var.get("default")
-        if declared is not None:
-            value = repr(declared)
-        else:
+        value = declared_default(var)
+        if value is None:
             value = "0.0" if var.get("type") == "number" else '"example"'
         pairs.append(f"{json.dumps(var['variable'])}: {value}")
     return "{" + ", ".join(pairs) + "}"
@@ -167,7 +193,7 @@ class StartHandler(NodeHandler):
         required = [
             v["variable"]
             for v in start_variables(node)
-            if v.get("required") and v.get("default") is None
+            if v.get("required") and declared_default(v) is None
         ]
 
         lines = [
@@ -203,11 +229,11 @@ class StartHandler(NodeHandler):
         for var in variables:
             name = var["variable"]
             literal = json.dumps(name)
-            declared = var.get("default")
+            declared = declared_default(var)
             if declared is not None:
                 # The workflow author set this in Dify; honouring it is what makes
                 # the generated package behave like the original workflow.
-                result[name] = f"supplied.get({literal}, {declared!r})"
+                result[name] = f"supplied.get({literal}, {declared})"
             elif var.get("required"):
                 result[name] = f"supplied[{literal}]"
             else:
@@ -216,11 +242,52 @@ class StartHandler(NodeHandler):
         return result
 
 
+# JSON Schema type -> the annotation used in generated TypedDicts.
+_JSON_SCHEMA_TYPES = {
+    "string": "str",
+    "number": "float",
+    "integer": "int",
+    "boolean": "bool",
+    "array": "list[Any]",
+    "object": "dict[str, Any]",
+}
+
+
 class LlmHandler(NodeHandler):
     node_type = "llm"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"text": "str", "usage": "dict[str, int]"}
+        fields = {"text": "str", "usage": "dict[str, int]"}
+        # With structured output enabled, downstream nodes read through it --
+        # `[<llm id>, "structured_output", "<field>"]`. Without declaring it the
+        # generated End body raised KeyError: 'structured_output' at run time.
+        if node.data.get("structured_output_enabled"):
+            fields["structured_output"] = "dict[str, Any]"
+        return fields
+
+    def stub_output(
+        self,
+        node: NodeInfo,
+        graph: WorkflowGraph,
+        node_name_map: dict[str, tuple[str, str]] | None = None,
+    ) -> dict[str, str]:
+        result = super().stub_output(node, graph, node_name_map)
+        if "structured_output" not in result:
+            return result
+
+        # The DSL carries the schema, so the Stub can honour its shape instead of
+        # emitting {} -- otherwise a downstream read of any declared field raises.
+        properties = (
+            node.data.get("structured_output", {}).get("schema", {}).get("properties", {})
+        )
+        if properties:
+            pairs = ", ".join(
+                f"{json.dumps(name)}: "
+                f"{placeholder_literal(_JSON_SCHEMA_TYPES.get(spec.get('type', ''), 'Any'))}"
+                for name, spec in properties.items()
+            )
+            result["structured_output"] = "{" + pairs + "}"
+        return result
 
 
 class KnowledgeRetrievalHandler(NodeHandler):

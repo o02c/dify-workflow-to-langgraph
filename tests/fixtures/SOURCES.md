@@ -8,6 +8,19 @@ against workflows in the wild (not just hand-written minimal cases).
 - `simple_workflow.yml` — minimal linear start → llm → end.
 - `ifelse_workflow.yml` — minimal `if-else` with `true`/`false` branches (ADR-0003).
 - `guardduty_handler.yml` — a `question-classifier` branching workflow.
+- `env_sys_workflow.yml` — built in Dify Cloud specifically to pin down shapes no
+  other fixture had. Exercises, in one `mode: workflow` export:
+  - `environment_variables` with `value_type` `string`, `integer` and **`secret`**
+    (the secret's value is exported in plaintext -- see ADR-0004)
+  - both env reference syntaxes: `{{#env.API_BASE#}}` in a prompt, and
+    `variable_selector: [env, MAX_RETRY]` in an `if-else` condition
+  - `sys.*` in End outputs: `[sys, app_id]` and `[sys, user_id]`
+  - Start variables covering `paragraph` / `text-input` / `number` / `select`,
+    required and optional, with and without a `default` -- including Dify's habit
+    of writing `default: ''` where no default was set, and a `number` whose
+    default arrives as the string `'3'`
+  - an LLM node with `structured_output_enabled` whose schema an End node reads
+    through a three-element selector
 
 ## Real exports
 
