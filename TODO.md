@@ -64,7 +64,7 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
     F1/F2/F3 を追加済み。グラフが実際に実行されたか（全ノード通過、End の値転送、
     分岐が 1 つに解決、資格情報なしの knowledge-retrieval が `[]`）を最終状態の
     JSON で確認する。macOS ではドライラン済み、Windows 実機はこれから
-  - [x] **Git Bash 経路の検証** — 完了。`scripts/verify-gitbash.sh`（bash 3.2 互換、
+  - [~] **Git Bash 経路の検証** — ネイティブ経路は完了、Docker 併用は未実施。`scripts/verify-gitbash.sh`（bash 3.2 互換、
     shellcheck クリーン）で Windows 11 ARM64 / MINGW64 / コードページ 437 上で
     17 passed / 0 failed。実質的な判定は PowerShell 版と同じ Python ヘルパを共有する
     - MSYS の引数パス変換により `/c/...` と `C:/...` の両形式が CLI に届く（M1 / M3）
@@ -74,6 +74,9 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
       `/usr/bin/env bash\r` になり Git Bash が起動すら拒否する
     - 共有フォルダ上には venv を作れない（`os error 87`）。Windows では無条件に
       ローカルへ複製するようにし、USAGE 8.3 にも注意として記載した
+    - [ ] **未実施**: E 群（`MSYS_NO_PATHCONV` + `pwd -W` のバインドマウント）。
+      元の懸念の中心はここだったが、VM に Docker が無いため動かせていない。
+      検証できたのは `pwd -W` が Windows 形式を返すこと（M2）まで
   - [ ] Windows 実機での Docker 検証（E 群）— **現状の手元環境では不可**。Docker Desktop for
     Windows は WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は
     Parallels Desktop の Pro / Business 版専用で、Standard 版では有効化できない。

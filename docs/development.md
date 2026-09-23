@@ -153,12 +153,23 @@ users to set `MSYS_NO_PATHCONV=1` and pass `$(pwd -W)` — without them, MSYS
 rewrites `target=/work` itself and the bind mount lands somewhere else.
 
 ```bash
-scripts/verify-gitbash.sh --expected-digest "$(make -s verify-digest)" --with-llm
+# On macOS/Linux, where make exists:
+scripts/verify-gitbash.sh --expected-digest "$(make -s verify-digest)"
+```
+
+```bash
+# On the Windows host. Git for Windows ships no make, so paste the digest --
+# command substitution would silently yield "" and degrade the digest check to
+# SKIP. Add --with-llm only when you mean to spend money on a real model.
+scripts/verify-gitbash.sh --expected-digest 3ca50a8c...
 ```
 
 It shares the substantive work with the PowerShell script — both call
 `output_digest.py` and `run_generated.py` — so the two shells cannot disagree
-about what the output should be. The `M` group holds the MSYS-specific checks and
+about the generated output. Their **check ids are per-script**, though: `D2` means
+different things in each, and each covers ground the other does not (the bash
+script has the `M` group; the PowerShell one has the branching and
+backslash-separator checks). Read the claim text, not the id. The `M` group holds the MSYS-specific checks and
 reports SKIP elsewhere, which is how the script gets exercised on macOS before
 going to a Windows host. Lint it with `shellcheck`; the two remaining SC2016
 findings are intentional (`$Format:%H$` must stay literal, and the PATH line is
@@ -174,7 +185,8 @@ env: bash\r: No such file or directory
 
 ## Dry-running the verification scripts
 
-The script can be dry-run on macOS/Linux with PowerShell installed
+Both scripts can be dry-run on macOS/Linux — `verify-gitbash.sh` runs natively
+(its `M` group reports SKIP), and the PowerShell one needs pwsh installed
 (`brew install powershell`), which exercises its whole control flow before it is
 handed to a Windows host:
 

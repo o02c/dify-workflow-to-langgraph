@@ -18,7 +18,7 @@
 #
 # Usage:
 #   scripts/verify-gitbash.sh [--expected-digest <hex>] [--with-llm] [--skip-docker]
-#                             [--no-copy]
+#                             [--no-copy] [--repo-root <path>]
 #
 # Prerequisite: uv. Installing uv alone is enough; it downloads CPython itself.
 #   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
@@ -34,12 +34,14 @@ NO_COPY=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo-root) REPO_ROOT="$2"; shift 2 ;;
-    --expected-digest) EXPECTED_DIGEST="$2"; shift 2 ;;
+    --repo-root) [ $# -ge 2 ] || { echo "--repo-root needs a value" >&2; exit 2; }
+                 REPO_ROOT="$2"; shift 2 ;;
+    --expected-digest) [ $# -ge 2 ] || { echo "--expected-digest needs a value" >&2; exit 2; }
+                       EXPECTED_DIGEST="$2"; shift 2 ;;
     --with-llm) WITH_LLM=1; shift ;;
     --skip-docker) SKIP_DOCKER=1; shift ;;
     --no-copy) NO_COPY=1; shift ;;
-    -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -70,6 +72,7 @@ add_result() {
     PASS) PASS_COUNT=$((PASS_COUNT + 1)); _c="$C_PASS" ;;
     FAIL) FAIL_COUNT=$((FAIL_COUNT + 1)); _c="$C_FAIL" ;;
     SKIP) SKIP_COUNT=$((SKIP_COUNT + 1)); _c="$C_SKIP" ;;
+    *) printf 'internal error: bad status %s for %s\n' "$_status" "$_id" >&2; exit 3 ;;
   esac
   printf '  %s[%s]%s %s - %s\n' "$_c" "$_status" "$C_OFF" "$_id" "$_claim"
   if [ -n "$_detail" ]; then
@@ -84,8 +87,15 @@ section() { printf '\n%s=== %s ===%s\n' "$C_HEAD" "$1" "$C_OFF"; }
 # Keep only the interesting part of a failed run: the CLI logs progress at INFO,
 # so a raw dump buries the one line that says what went wrong.
 error_detail() {
-  _out="$(grep -E 'ERROR|Traceback|Error code|error:' 2>/dev/null | tail -3)"
-  if [ -z "$_out" ]; then _out="$(tail -4)"; fi
+  # Takes the text as an argument, not on stdin. It used to read stdin, but grep
+  # drains it to EOF, so the tail fallback always read a closed pipe and produced
+  # nothing -- suppressing the diagnostic in exactly the case it was wanted (a
+  # failure whose output contains none of these literals).
+  _text="${1:-}"
+  _out="$(printf '%s\n' "$_text" | grep -E 'ERROR|Traceback|Error code|error:' | tail -3)"
+  if [ -z "$_out" ]; then
+    _out="$(printf '%s\n' "$_text" | tail -4)"
+  fi
   printf '%s' "$_out"
 }
 
@@ -110,7 +120,12 @@ if [ "$ON_MSYS_EARLY" -eq 1 ] && [ "$NO_COPY" -eq 0 ]; then
   # /tmp, not $TMP: under Git Bash $TMP holds a Windows-form path
   # (C:\Users\...\Temp) which would produce a mixed-separator string here.
   # Git Bash's /tmp maps to that same local directory.
-  LOCAL_ROOT="/tmp/d2l-repo-gitbash"
+  #
+  # Derived from the source path, so two different checkouts do not land in one
+  # directory. tar never deletes, so a shared destination would keep files that
+  # were removed upstream -- including fixtures the preflight then finds.
+  LOCAL_KEY="$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)"
+  LOCAL_ROOT="/tmp/d2l-repo-gitbash-$LOCAL_KEY"
   printf '%sWindows host: copying the repo to local disk first.%s\n' "$C_SKIP" "$C_OFF"
   printf '  from: %s\n  to:   %s\n' "$REPO_ROOT" "$LOCAL_ROOT"
   printf 'A venv cannot reliably be built on a shared folder.\n'
@@ -119,9 +134,14 @@ if [ "$ON_MSYS_EARLY" -eq 1 ] && [ "$NO_COPY" -eq 0 ]; then
   (cd "$REPO_ROOT" && tar cf - \
       --exclude='./.git' --exclude='./.venv' --exclude='__pycache__' .) \
     | (cd "$LOCAL_ROOT" && tar xf -)
-  if [ -f "$REPO_ROOT/.env" ]; then
+  # Only when the LLM group will actually read it: this copy lives in /tmp and is
+  # reused by later runs, so carrying credentials there unconditionally means a
+  # stale copy keeps working after the real .env is gone.
+  if [ "$WITH_LLM" -eq 1 ] && [ -f "$REPO_ROOT/.env" ]; then
     cp -f "$REPO_ROOT/.env" "$LOCAL_ROOT/.env"
-    printf 'Carried .env across.\n'
+    printf 'Carried .env across (--with-llm).\n'
+  else
+    rm -f "$LOCAL_ROOT/.env"
   fi
   REPO_ROOT="$LOCAL_ROOT"
   printf 'Copied.\n'
@@ -244,7 +264,9 @@ if ! PREFLIGHT="$(cd "$REPO_ROOT" && run_py --version)"; then
 fi
 printf '%sReady: %s%s\n' "$C_DIM" "$(printf '%s' "$PREFLIGHT" | tail -1)" "$C_OFF"
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/d2l-gitbash-XXXXXX")"
+# /tmp for the same reason as LOCAL_ROOT above: a Windows-form $TMPDIR would
+# produce a mixed-separator path.
+WORK="$(mktemp -d "/tmp/d2l-gitbash-XXXXXX")"
 cp "$FIXTURES/guardduty_handler.yml" "$FIXTURES/simple_workflow.yml" "$WORK/"
 GEN_ROOT="$WORK/out/guardduty_handler"
 
@@ -258,7 +280,7 @@ if [ -d "$GEN_ROOT" ]; then
   add_result B1 PASS "Converting a DSL with Japanese text succeeds"
 else
   add_result B1 FAIL "Converting a DSL with Japanese text succeeds" \
-    "$(printf '%s' "$B1_OUT" | error_detail)"
+    "$(error_detail "$B1_OUT")"
 fi
 
 if [ -f "$GEN_ROOT/state.py" ] && grep -q "質問分類器" "$GEN_ROOT/state.py" 2>/dev/null; then
@@ -269,20 +291,27 @@ else
 fi
 
 CRLF_FILES=""
+PY_COUNT=0
 if [ -d "$GEN_ROOT" ]; then
   # Read NUL-delimited: a Windows path routinely contains spaces
   # (C:\Program Files\...), which word-splitting would tear apart.
   while IFS= read -r -d '' f; do
+    PY_COUNT=$((PY_COUNT + 1))
     if LC_ALL=C grep -q $'\r' "$f" 2>/dev/null; then
       CRLF_FILES="$CRLF_FILES $(basename "$f")"
     fi
   done < <(find "$GEN_ROOT" -name '*.py' -print0 2>/dev/null)
 fi
-if [ -d "$GEN_ROOT" ] && [ -z "$CRLF_FILES" ]; then
-  add_result B3 PASS "Generated files use LF, not CRLF (cross-platform determinism)"
+# Require files to have been found: "no CRLF" is vacuously true of nothing.
+if [ "$PY_COUNT" -gt 0 ] && [ -z "$CRLF_FILES" ]; then
+  add_result B3 PASS "Generated files use LF, not CRLF (cross-platform determinism)" \
+    "$PY_COUNT files checked"
+elif [ "$PY_COUNT" -eq 0 ]; then
+  add_result B3 FAIL "Generated files use LF, not CRLF (cross-platform determinism)" \
+    "no generated .py files to check"
 else
   add_result B3 FAIL "Generated files use LF, not CRLF (cross-platform determinism)" \
-    "CRLF in:${CRLF_FILES:- (no output to check)}"
+    "CRLF in:$CRLF_FILES"
 fi
 
 DIGEST="(unavailable)"
@@ -316,7 +345,7 @@ else
       "argument conversion turned it into a Windows path"
   else
     add_result M1 FAIL "An MSYS-style path (/c/...) reaches the CLI usable" \
-      "$(printf '%s' "$M1_OUT" | error_detail)"
+      "$(error_detail "$M1_OUT")"
   fi
 
   # pwd -W is the MSYS-only way to get the Windows form, which USAGE 9.2 tells
@@ -330,13 +359,26 @@ else
     add_result M2 FAIL 'pwd -W returns a Windows-form path (USAGE 9.2)' "pwd -W failed"
   fi
 
-  # A Windows-form path must work too: users copy paths out of Explorer.
+  # A forward-slash Windows-form path must work too.
   M3_OUT="$(cd "$WORK" && run_cli "$(pwd -W 2>/dev/null)/guardduty_handler.yml" -o winform --skip-implement)"
   if [ -f "$WORK/winform/guardduty_handler/state.py" ]; then
     add_result M3 PASS "A Windows-form path (C:/...) also reaches the CLI usable"
   else
     add_result M3 FAIL "A Windows-form path (C:/...) also reaches the CLI usable" \
-      "$(printf '%s' "$M3_OUT" | error_detail)"
+      "$(error_detail "$M3_OUT")"
+  fi
+
+  # What a user actually pastes from Explorer is backslash-separated. Quoted, it
+  # must survive to the CLI -- USAGE 8.4 claims both separators work. Unquoted,
+  # bash eats the backslashes before the CLI ever sees them, which is why 8.3
+  # tells Git Bash users to quote.
+  M4_PATH="$(cd "$WORK" && pwd -W 2>/dev/null | tr '/' '\\')\\guardduty_handler.yml"
+  M4_OUT="$(cd "$WORK" && run_cli "$M4_PATH" -o backslash --skip-implement)"
+  if [ -f "$WORK/backslash/guardduty_handler/state.py" ]; then
+    add_result M4 PASS "A quoted Explorer-form path (C:\\...) reaches the CLI usable"
+  else
+    add_result M4 FAIL "A quoted Explorer-form path (C:\\...) reaches the CLI usable" \
+      "$(error_detail "$M4_OUT")"
   fi
 fi
 
@@ -347,7 +389,10 @@ section "D. bash environment variables (USAGE 8.2)"
 
 VERBOSE_OUT="$(cd "$WORK" && LOG_LEVEL=DEBUG run_cli guardduty_handler.yml -o dbg1 --skip-implement)"
 QUIET_OUT="$(cd "$WORK" && LOG_LEVEL=ERROR run_cli guardduty_handler.yml -o dbg2 --skip-implement)"
-if [ "${#VERBOSE_OUT}" -gt "${#QUIET_OUT}" ]; then
+# Both conversions must have produced output, not just differed in length: a
+# DEBUG run that dies with a long traceback is longer than a quiet ERROR run.
+if [ -d "$WORK/dbg1/guardduty_handler" ] && [ -d "$WORK/dbg2/guardduty_handler" ] &&
+   [ "${#VERBOSE_OUT}" -gt "${#QUIET_OUT}" ]; then
   add_result D1 PASS 'The inline VAR=value form reaches the CLI (USAGE 8.2)' \
     "LOG_LEVEL honoured (DEBUG more verbose than ERROR)"
 else
@@ -356,7 +401,7 @@ else
 fi
 
 EXPORT_OUT="$(cd "$WORK" && export LOG_LEVEL=DEBUG && run_cli guardduty_handler.yml -o dbg3 --skip-implement)"
-if [ "${#EXPORT_OUT}" -gt "${#QUIET_OUT}" ]; then
+if [ -d "$WORK/dbg3/guardduty_handler" ] && [ "${#EXPORT_OUT}" -gt "${#QUIET_OUT}" ]; then
   add_result D2 PASS 'export VAR=value reaches the CLI (USAGE 8.2)'
 else
   add_result D2 FAIL 'export VAR=value reaches the CLI (USAGE 8.2)' \
@@ -390,7 +435,7 @@ if printf '%s' "$F1_JSON" | grep -q '"start_node"' &&
   add_result F1 PASS "A generated linear workflow runs and visits every node"
 else
   add_result F1 FAIL "A generated linear workflow runs and visits every node" \
-    "$(printf '%s' "$F1_OUT" | error_detail)"
+    "$(error_detail "$F1_OUT")"
 fi
 
 if printf '%s' "$F1_JSON" | grep -q '"query": "example"'; then
@@ -405,7 +450,7 @@ if printf '%s' "$F3_OUT" | grep -q "missing required workflow input"; then
   add_result F3 PASS "A missing required input fails loudly rather than defaulting"
 else
   add_result F3 FAIL "A missing required input fails loudly rather than defaulting" \
-    "$(printf '%s' "$F3_OUT" | error_detail)"
+    "$(error_detail "$F3_OUT")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -418,33 +463,47 @@ RT_DIR="$WORK/rt"
 LLM_NODE="$RT_DIR/simple_workflow/nodes/llm_node.py"
 if [ -f "$LLM_NODE" ] && grep -q '"text": "placeholder"' "$LLM_NODE"; then
   # Stand in for an implemented body so the printed state carries non-ASCII.
-  run_py -c "
+  INJECT_OUT="$(run_py -c "
 import sys
 from pathlib import Path
 p = Path(sys.argv[1])
+src = p.read_text(encoding='utf-8')
+assert '\"text\": \"placeholder\"' in src, 'stub shape changed'
 p.write_text(
-    p.read_text(encoding='utf-8').replace('\"text\": \"placeholder\"', '\"text\": \"\u7ffb\u8a33\u7d50\u679c\"'),
+    src.replace('\"text\": \"placeholder\"', '\"text\": \"\u7ffb\u8a33\u7d50\u679c\"'),
     encoding='utf-8', newline='\n',
 )
-" "$LLM_NODE" >/dev/null 2>&1
+" "$LLM_NODE")"
+INJECT_OK=$?
 
   # A narrow codec stands in for a legacy Windows console on any host: the
   # generated __main__.py must escape what it cannot encode, not crash.
-  C1_OUT="$(cd "$RT_DIR" && PYTHONIOENCODING=cp1252 run_py -m simple_workflow 2>&1 || true)"
-  if printf '%s' "$C1_OUT" | grep -q "UnicodeEncodeError"; then
-    add_result C1 FAIL "A narrow console codec does not crash the run (USAGE 8.1)" \
-      "$(printf '%s' "$C1_OUT" | error_detail)"
+  # PYTHONUTF8 is cleared explicitly: a host that followed USAGE 8.1 and set it
+  # permanently would otherwise change what this check is testing.
+  C1_OUT="$(cd "$RT_DIR" && PYTHONUTF8='' PYTHONIOENCODING=cp1252 run_py -m simple_workflow)"
+  C1_RC=$?
+  # Requiring exit 0 as well as the absence of UnicodeEncodeError: without it the
+  # check passed when the module failed to import, or when the injection above
+  # silently did nothing and there was no non-ASCII to encode at all.
+  if [ "$INJECT_OK" -ne 0 ]; then
+    add_result C1 SKIP "A narrow console codec does not crash the run (USAGE 8.1)" \
+      "could not inject non-ASCII: $(error_detail "$INJECT_OUT")"
+  elif [ "$C1_RC" -eq 0 ] && ! printf '%s' "$C1_OUT" | grep -q "UnicodeEncodeError"; then
+    if printf '%s' "$C1_OUT" | grep -q '\\u7ffb'; then _how="escaped as \\uXXXX, as documented"
+    else _how="rendered directly"; fi
+    add_result C1 PASS "A narrow console codec does not crash the run (USAGE 8.1)" "$_how"
   else
-    add_result C1 PASS "A narrow console codec does not crash the run (USAGE 8.1)" \
-      "escaped rather than raising"
+    add_result C1 FAIL "A narrow console codec does not crash the run (USAGE 8.1)" \
+      "exit=$C1_RC $(error_detail "$C1_OUT")"
   fi
 
-  C2_OUT="$(cd "$RT_DIR" && PYTHONUTF8=1 PYTHONIOENCODING=utf-8 run_py -m simple_workflow 2>&1 || true)"
-  if printf '%s' "$C2_OUT" | grep -q "翻訳結果"; then
+  C2_OUT="$(cd "$RT_DIR" && PYTHONUTF8=1 PYTHONIOENCODING=utf-8 run_py -m simple_workflow)"
+  C2_RC=$?
+  if [ "$C2_RC" -eq 0 ] && printf '%s' "$C2_OUT" | grep -q "翻訳結果"; then
     add_result C2 PASS "With PYTHONUTF8=1, the workflow emits UTF-8"
   else
     add_result C2 FAIL "With PYTHONUTF8=1, the workflow emits UTF-8" \
-      "$(printf '%s' "$C2_OUT" | error_detail)"
+      "$(error_detail "$C2_OUT")"
   fi
 else
   add_result C0 SKIP "Console encoding checks" "the generator's stub shape changed"
@@ -463,10 +522,11 @@ elif ! docker version --format '{{.Server.Version}}' >/dev/null 2>&1; then
   add_result E0 SKIP "Docker checks" \
     "daemon unreachable (in a Parallels VM: nested virtualization is Pro/Business only)"
 else
-  if (cd "$REPO_ROOT" && docker build -q -t dify2langgraph-gitbash . >/dev/null 2>&1); then
+  E1_OUT="$(cd "$REPO_ROOT" && docker build -q -t dify2langgraph-gitbash . 2>&1)"
+  if [ $? -eq 0 ]; then
     add_result E1 PASS "The converter image builds"
   else
-    add_result E1 FAIL "The converter image builds"
+    add_result E1 FAIL "The converter image builds" "$(error_detail "$E1_OUT")"
   fi
 
   DOCKER_OUT="$WORK/dockerout"
@@ -485,7 +545,12 @@ else
   if [ -f "$DOCKER_OUT/out/guardduty_handler/state.py" ]; then
     add_result E2 PASS "MSYS_NO_PATHCONV + pwd -W give a working bind mount (USAGE 9.2)"
     E2_DIGEST="$(run_py "$DIGEST_PY" --dir "$DOCKER_OUT/out/guardduty_handler" | tail -1 | tr -d '\r')"
-    if [ "$E2_DIGEST" = "$DIGEST" ]; then
+    case "$E2_DIGEST" in
+      [0-9a-f]*) ;;
+      *) E2_DIGEST="(unavailable)" ;;
+    esac
+    # Both being the same error string is not a match.
+    if [ "$E2_DIGEST" = "$DIGEST" ] && [ "$E2_DIGEST" != "(unavailable)" ]; then
       add_result E3 PASS "Container output matches the native run" "$E2_DIGEST"
     else
       add_result E3 FAIL "Container output matches the native run" \
@@ -493,7 +558,7 @@ else
     fi
   else
     add_result E2 FAIL "MSYS_NO_PATHCONV + pwd -W give a working bind mount (USAGE 9.2)" \
-      "$(printf '%s' "$E2_OUT" | error_detail)"
+      "$(error_detail "$E2_OUT")"
     add_result E3 SKIP "Container output matches the native run" "E2 produced no output"
   fi
 fi
@@ -531,12 +596,23 @@ else
     printf '%s  conversion provider: %s%s\n' "$C_DIM" "$CONV_PROVIDER" "$C_OFF"
     LLM_DIR="$WORK/llm"
     G1_OUT="$(cd "$WORK" && run_cli simple_workflow.yml -o "$LLM_DIR" --llm-provider "$CONV_PROVIDER")"
+    # Count the node files as well as the stub markers: "no TODO found" is
+    # vacuously true when the glob matched nothing, which made G1 pass on an
+    # empty directory.
+    NODE_COUNT=0
     STILL_STUBBED=0
     if [ -d "$LLM_DIR/simple_workflow/nodes" ]; then
-      STILL_STUBBED="$(grep -l "TODO: Implement" "$LLM_DIR"/simple_workflow/nodes/*.py 2>/dev/null | wc -l | tr -d ' ')"
+      while IFS= read -r -d '' f; do
+        case "$(basename "$f")" in __init__.py) continue ;; esac
+        NODE_COUNT=$((NODE_COUNT + 1))
+        if grep -q "TODO: Implement" "$f" 2>/dev/null; then
+          STILL_STUBBED=$((STILL_STUBBED + 1))
+        fi
+      done < <(find "$LLM_DIR/simple_workflow/nodes" -name '*.py' -print0 2>/dev/null)
     fi
-    if [ -d "$LLM_DIR/simple_workflow/nodes" ] && [ "$STILL_STUBBED" = "0" ]; then
-      add_result G1 PASS "LLM fills node bodies at conversion time" "via $CONV_PROVIDER"
+    if [ "$NODE_COUNT" -gt 0 ] && [ "$STILL_STUBBED" -eq 0 ]; then
+      add_result G1 PASS "LLM fills node bodies at conversion time" \
+        "$NODE_COUNT node files via $CONV_PROVIDER, none left stubbed"
       printf '%s' '{"start_node": {"query": "hello"}}' > "$WORK/g2.json"
       G2_OUT="$(run_py "$RUN_PY" "$LLM_DIR" simple_workflow --initial-file "$WORK/g2.json")"
       if printf '%s' "$G2_OUT" | grep -q '^{'; then
@@ -547,7 +623,7 @@ else
       fi
     else
       add_result G1 FAIL "LLM fills node bodies at conversion time" \
-        "$(printf '%s' "$G1_OUT" | error_detail)"
+        "$(error_detail "$G1_OUT")"
       add_result G2 SKIP "An LLM-implemented workflow runs" "G1 did not implement the nodes"
     fi
   fi
@@ -573,7 +649,11 @@ printf 'Output digest (this host): %s\n' "$DIGEST"
 printf 'Compare on macOS/Linux with: make verify-digest\n'
 printf 'Temp working directory: %s\n' "$WORK"
 if [ "$WITH_LLM" -eq 1 ] && [ -f "$WORK/.env" ]; then
-  printf '%sNote: a copy of your .env is in that directory -- delete it when done.%s\n' "$C_SKIP" "$C_OFF"
+  printf '%sNote: copies of your .env are in:%s\n' "$C_SKIP" "$C_OFF"
+  printf '  %s/.env\n' "$WORK"
+  [ -f "$REPO_ROOT/.env" ] && [ "$REPO_ROOT" != "$(cd "$(dirname "$0")/.." && pwd)" ] &&
+    printf '  %s/.env\n' "$REPO_ROOT"
+  printf '%sDelete them when done.%s\n' "$C_SKIP" "$C_OFF"
 fi
 
 [ "$FAIL_COUNT" -eq 0 ]

@@ -318,16 +318,29 @@ dify2langgraph /c/Users/you/workflow.yml -o out --skip-implement   # どちら�
 dify2langgraph C:/Users/you/workflow.yml -o out --skip-implement
 ```
 
+> **エクスプローラからコピーしたパスは引用符で囲んでください。** `C:\Users\you\wf.yml`
+> のようなバックスラッシュ区切りは、囲まないと bash がバックスラッシュを取り除いて
+> しまい（`C:Usersyouwf.yml`）CLI に届きません。囲めばそのまま使えます。
+>
+> ```bash
+> dify2langgraph "C:\Users\you\workflow.yml" -o out --skip-implement
+> ```
+
 > **Docker と組み合わせるときだけ、この自動変換が邪魔になります。** 変換は
 > `target=/work` のようなコンテナ内パスにも及ぶためです。[9.2](#92-変換する) の
 > `MSYS_NO_PATHCONV=1` と `$(pwd -W)` を使ってください。
 
 > **ネットワークドライブや共有フォルダ上に仮想環境を作らないでください。**
-> リポジトリをそこに置いて `uv sync` すると、`The parameter is incorrect.
-> (os error 87)` のような失敗をします。ローカルディスクに置いてから作業するか、
-> 仮想環境だけをローカルに置いてください（`uv` なら `UV_PROJECT_ENVIRONMENT`）。
-> 変換自体は共有フォルダ上のファイルを読み書きできます。問題になるのは
-> 仮想環境の作成だけです。
+> [2 章 B](#b-そのままソースとして使う) の手順でリポジトリをそこに置いて `uv sync`
+> すると、`The parameter is incorrect. (os error 87)` のような失敗をします
+> （Parallels の共有フォルダで実測）。リポジトリをローカルディスクに複製してから
+> 作業してください。
+>
+> `uv` には仮想環境の場所だけを移す `UV_PROJECT_ENVIRONMENT` がありますが、uv 自身の
+> ドキュメントが「複数プロジェクトで共有すると上書きし合うので CI やコンテナ向け」と
+> していること、およびこの構成を検証していないことから、ここでは推奨しません。
+> [2 章 A](#a-パッケージとしてインストール推奨) の `pip install .` は共有フォルダ上に
+> 仮想環境を作らないため、この問題を受けません。
 
 ### 8.4 補足
 
