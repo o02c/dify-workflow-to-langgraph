@@ -32,7 +32,11 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   - [x] 生成コードが ruff の既定設定（line-length 88）で lint クリーンであることを全フィクスチャで固定
         （`TestGeneratedCodeIsLintClean`。生成物は `pyproject.toml` を持たないため既定設定で lint される）
   - [x] AWS リージョン / プロファイル解決、SSO エラーメッセージ、`.env` 探索
-  - [ ] ハンドラ単位、循環参照・孤立ノード等のエッジケース
+  - [~] 循環参照・孤立ノード・自己ループを追加。`get_dependency_order` が循環時に
+    静かにノードを落としていた（3 ノード中 1 つしか返らない）ので、循環を検出して
+    関与ノードを名指しする `ValueError` にした。ハンドラは `if-else` だけ
+    `get_handler` で名指しされていなかったので補った
+  - [ ] 残り: ハンドラごとの `output_fields` / `stub_output` の網羅
 
 ## Packaging / 移植性（ADR-0008）
 

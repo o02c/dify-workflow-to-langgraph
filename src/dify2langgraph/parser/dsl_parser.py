@@ -304,7 +304,14 @@ class DifyDSLParser:
             graph: The parsed workflow graph.
 
         Returns:
-            List of node IDs in execution order.
+            List of node IDs in execution order. Nodes with no edges at all are
+            included; they have nothing to wait for.
+
+        Raises:
+            ValueError: If the graph contains a cycle. A cyclic graph has no
+                topological order, and Kahn's algorithm simply never reaches the
+                nodes involved -- so the alternative is returning a short list
+                that looks complete. Naming the nodes makes the DSL fixable.
         """
         # Build adjacency list from edges
         adjacency: dict[str, list[str]] = {node_id: [] for node_id in graph.nodes}
@@ -328,6 +335,16 @@ class DifyDSLParser:
                 in_degree[neighbor] -= 1
                 if in_degree[neighbor] == 0:
                     queue.append(neighbor)
+
+        if len(result) != len(graph.nodes):
+            # Whatever never reached in-degree zero is in a cycle or downstream
+            # of one. Before this check the caller silently got the rest: a
+            # two-node cycle in a three-node workflow returned one node.
+            unreachable = sorted(set(graph.nodes) - set(result))
+            raise ValueError(
+                "workflow graph has a cycle; no dependency order exists. "
+                f"Nodes in or after the cycle: {', '.join(unreachable)}"
+            )
 
         return result
 
