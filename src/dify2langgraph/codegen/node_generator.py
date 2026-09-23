@@ -6,7 +6,10 @@ This module generates individual node files in the nodes/ directory.
 import json
 from pathlib import Path
 
-from dify2langgraph.codegen.handlers import get_handler
+from dify2langgraph.codegen.handlers import (
+    get_handler,
+    reference_access,
+)
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
@@ -72,7 +75,7 @@ def _generate_node_file(
                 "raw": ref.raw,
                 "node_id": ref.node_id,
                 "field_path": ref.field_path,
-                "state_access": ref.to_state_access(node_name_map),
+                "state_access": reference_access(ref, node_name_map),
             }
             for ref in node.references
         ],
@@ -95,10 +98,22 @@ def _generate_node_file(
 
     # Local imports, sorted as one block: the handler's extra imports (e.g. the
     # Retriever port) can sort before `..state`, so they cannot just be appended.
+    # Computed here rather than at the point of use: whether the body reads an
+    # env constant decides whether the module has to be imported, and an import
+    # the Stub never uses is a lint failure in the generated package.
+    body_prelude = handler.body_prelude(node, graph, node_name_map)
+    body_output = handler.stub_output(node, graph, node_name_map)
+    uses_env = any(
+        "env." in line for line in (*body_prelude, *body_output.values())
+    )
+
     local_imports = [
         "from ..state import " + ", ".join(sorted(["GraphState", class_name])),
         *handler.body_imports(node),
     ]
+    if uses_env:
+        # env.* are constants in the generated env.py, not state (ADR-0004).
+        local_imports.append("from .. import env")
     lines.extend(sorted(local_imports))
 
     lines += [
@@ -141,7 +156,7 @@ def _generate_node_file(
     if node.references:
         lines.append("    # How to access input variables:")
         for ref in node.references:
-            lines.append(f"    # {ref.raw} -> {ref.to_state_access(node_name_map)}")
+            lines.append(f"    # {ref.raw} -> {reference_access(ref, node_name_map)}")
         lines.append("")
 
     # Generate the node body. The handler owns the output values: most types emit
@@ -154,11 +169,10 @@ def _generate_node_file(
     else:
         lines.append(f"    # Deterministic {node.type} node (generated from the Dify DSL)")
     lines.append("")
-    prelude = handler.body_prelude(node, graph, node_name_map)
-    if prelude:
-        lines.extend(prelude)
+    if body_prelude:
+        lines.extend(body_prelude)
         lines.append("")
-    stub_output = handler.stub_output(node, graph, node_name_map)
+    stub_output = body_output
     lines.append(f"    output: {class_name} = {{")
     for field_name, literal in stub_output.items():
         lines.append(f'        "{field_name}": {literal},')

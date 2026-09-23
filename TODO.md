@@ -109,16 +109,12 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   selector 形式とテンプレート形式の両方が解決される。sys の構成はモード依存
   （`sys.query` は chatflow のみ、workflow は `sys.app_id` / `sys.user_id`）なので、
   固定の一覧は持たない
-- [ ] **`env.*` の実装** — secret の扱いを決める必要がある。
-  実 DSL（`env_sys_workflow.yml`）で判明したこと:
-  - `value_type: secret` の環境変数は**値が平文でエクスポートされる**。生成した
-    `env.py` の定数にすると、顧客がコミットするソースに資格情報が入る。string /
-    integer と同じ扱いにはできない。候補は「secret だけ実行時に環境変数から読む」
-  - パーサは `{{#env.API_BASE#}}` を `state["env"]["API_BASE"]` に正規化しており、
-    ADR-0004 の「env は state の外の定数」と矛盾する。`GraphState` に `env` キーは
-    無いので解決できない。テンプレート経路と ADR のどちらかを動かす必要がある
-  - パーサの `{{#env.X#}}` 正規化は `sys` と同じ扱いになっているが、`env` は
-    「state の外の定数」と決まっているので、この経路を止めるか ADR を変えるかの判断が要る
+- [x] **`env.*` の実装** — `env.py` を生成し、`env.NAME` で参照する（ADR-0004）。
+  secret は定数にせず、実行時に同名の環境変数から読む（PEP 562 の module `__getattr__`）。
+  未設定なら変数名を挙げて `RuntimeError`。DSL は secret の値を平文でエクスポートするため、
+  定数にすると顧客がコミットするソースに資格情報が入る。参照解決も
+  `state["env"][...]` から `env.NAME` に変えた（前者はコメントと NODE_CONFIG にのみ
+  現れていたが、そこは LLM 本体生成の入力そのもの）
 - [x] chatflow（`mode: advanced-chat`）の形を fixture 化 — `chatflow_sys_query.yml`。
   `answer` 終端・`variables: []` の Start・非数値ノード ID・`{{#sys.query#}}` を含む。
   これで生成コード品質のバグ 2 件（`END` が未使用 import になる／`__init__.py` の

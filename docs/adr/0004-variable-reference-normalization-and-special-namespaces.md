@@ -43,8 +43,26 @@ Only referenced fields are declared, deliberately: the `sys` catalogue is **mode
 (`sys.query` exists in `advanced-chat` but not in `workflow`, where `sys.app_id` / `sys.user_id`
 appear instead), so a fixed list would be wrong for one mode or the other.
 
-Still deferred: `env.*` (see the findings below), `{{#context#}}` resolution, and wiring
-normalized inputs into non-End node bodies (arrives with LLM opt-in body generation, ADR-0001).
+**`env.*` is now implemented**, with one amendment forced by a real export. The DSL's
+`environment_variables` become constants in a generated `env.py`, reached as `env.NAME`
+after `from .. import env` — the module form rather than `from ..env import NAME`, so a DSL
+variable called `state` or `output` cannot shadow a local.
+
+The amendment: a `value_type: secret` variable **exports its value in plaintext**, so emitting
+it as a constant would write a credential into source the customer then commits. Secrets are
+therefore *not* constants. They are read from the process environment on first access (PEP 562
+module `__getattr__`), keyed by the DSL's own name, and a missing one raises naming the variable
+rather than yielding `""` — the same "fail with a named cause" choice as the Bedrock region
+(ADR-0008) and required workflow inputs (ADR-0009). Lazy rather than import-time so a package
+whose Stub bodies never read the secret still imports and runs.
+
+Reference resolution moved with it: `env.API_BASE` now renders as `env.API_BASE`, not
+`state["env"]["API_BASE"]`. That address only ever reached generated comments and the embedded
+NODE_CONFIG block, never executable code — but those are exactly what the LLM body-generation
+pass reads, so it was teaching the model to write code that cannot resolve.
+
+Still deferred: `{{#context#}}` resolution, and wiring normalized inputs into non-End node
+bodies (arrives with LLM opt-in body generation, ADR-0001).
 
 ## Findings from a real export (`tests/fixtures/env_sys_workflow.yml`)
 

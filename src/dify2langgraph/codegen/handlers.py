@@ -110,6 +110,9 @@ class NodeHandler:
 # references. Both reference syntaxes arrive here already normalised by the
 # parser into VariableReference(node_id="sys", ...).
 SYS_NAMESPACE = "sys"
+# ADR-0004 puts env *outside* state: the DSL's environment_variables are
+# constants, emitted into a generated env.py module (see env_generator).
+ENV_NAMESPACE = "env"
 
 # sys.files is a list of uploaded files; everything else observed is a string id.
 _SYS_FIELD_TYPES = {"files": "list[Any]"}
@@ -171,15 +174,55 @@ def resolve_selector(
     elif source == SYS_NAMESPACE:
         # ADR-0004: sys lives in state under its own reserved key.
         key = SYS_NAMESPACE
+    elif source == ENV_NAMESPACE:
+        # Constants live in the generated env.py, reached as `env.NAME` after
+        # `from .. import env` -- not through state (ADR-0004). The module form is
+        # used rather than `from ..env import NAME` so a DSL variable named e.g.
+        # `state` or `output` cannot shadow a local.
+        return ".".join([ENV_NAMESPACE, *(str(part) for part in selector[1:])])
     else:
-        # env is specified as module constants outside state, and is not
-        # implemented yet -- see ADR-0004.
         return None
 
     access = f"state[{json.dumps(key)}]"
     for part in selector[1:]:
         access += f"[{json.dumps(str(part))}]"
     return access
+
+
+def reference_access(
+    ref: Any,
+    node_name_map: dict[str, tuple[str, str]] | None = None,
+) -> str:
+    """How a parsed VariableReference is written in generated code.
+
+    The parser normalises every syntax into `state[...]`, which is right for Node
+    outputs and for `sys`, but wrong for `env`: those are module constants, and
+    `GraphState` has no `env` key. The generated comments and NODE_CONFIG block
+    feed the LLM body-generation pass, so an address that cannot resolve there
+    teaches the model to write code that fails.
+
+    Args:
+        ref: A :class:`~dify2langgraph.parser.dsl_parser.VariableReference`.
+        node_name_map: Optional node_id -> (snake_case, CamelCase) mapping.
+
+    Returns:
+        A Python expression.
+    """
+    if ref.node_id == ENV_NAMESPACE:
+        return ".".join([ENV_NAMESPACE, *ref.field_path])
+    return ref.to_state_access(node_name_map)
+
+
+def references_env(node: NodeInfo) -> bool:
+    """Whether a node reads any `env.*` value.
+
+    Args:
+        node: The Node being generated.
+
+    Returns:
+        True when the generated body needs `from .. import env`.
+    """
+    return any(ref.node_id == ENV_NAMESPACE for ref in node.references)
 
 
 def declared_default(var: dict[str, Any]) -> str | None:

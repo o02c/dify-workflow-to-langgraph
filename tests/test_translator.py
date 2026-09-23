@@ -5,6 +5,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from dify2langgraph.cli import translate
 from dify2langgraph.codegen import (
     generate_graph_file,
@@ -478,12 +480,8 @@ class TestRealDslEnvSysWorkflow:
             assert "query: str" in chat_sys and "files: list[Any]" in chat_sys
             assert "app_id" not in chat_sys
 
-    def test_env_selector_still_falls_back(self):
-        """`env` is specified as constants outside state and is not implemented.
-
-        Documents the deferral: `GraphState` has no `env` key, so emitting a state
-        access for it would generate code that cannot resolve (ADR-0004).
-        """
+    def test_env_is_not_in_state(self):
+        """`env` is constants outside state, so GraphState must not carry it."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
             translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
@@ -491,6 +489,90 @@ class TestRealDslEnvSysWorkflow:
             state = (output_dir / "state.py").read_text(encoding="utf-8")
 
             assert "env:" not in state
+
+    def test_env_reference_points_at_the_constants_module(self):
+        """Not `state["env"][...]`, which nothing can resolve.
+
+        The generated comments and NODE_CONFIG block are what the LLM
+        body-generation pass reads, so an address that cannot resolve there
+        teaches the model to write code that fails.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1785682272592.py").read_text(encoding="utf-8")
+
+            assert "# env.API_BASE -> env.API_BASE" in body
+            assert 'state["env"]' not in body
+
+
+class TestEnvConstantsModule:
+    """env.py: DSL constants, with secrets deliberately left out (ADR-0004)."""
+
+    def _generate(self, tmpdir: str) -> str:
+        """Generate the env fixture and return env.py's source."""
+        output_dir = Path(tmpdir)
+        translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+        return (output_dir / "env.py").read_text(encoding="utf-8")
+
+    def test_non_secret_values_become_typed_constants(self):
+        """An integer stays an integer; a string stays a string."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = self._generate(tmpdir)
+
+            assert "API_BASE = 'https://example.com'" in source
+            assert "MAX_RETRY = 2" in source
+
+    def test_a_secret_value_is_never_written_into_source(self):
+        """Dify exports a secret's value in plaintext; it must not land here.
+
+        The fixture's secret is `DUMMY`, so its presence in the generated module
+        would mean a real deployment writes a real credential into a file the
+        customer commits.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = self._generate(tmpdir)
+
+            assert "DUMMY" not in source
+            assert "SECRET" in source  # declared, just not valued
+
+    def test_a_missing_secret_raises_with_the_variable_named(self):
+        """Returning "" would surface later as an unexplained downstream error."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            namespace: dict = {}
+            exec(  # noqa: S102 - executing our own generated module, by design
+                (output_dir / "env.py").read_text(encoding="utf-8"), namespace
+            )
+            getattr_ = namespace["__getattr__"]
+
+            with pytest.raises(RuntimeError, match="SECRET"):
+                getattr_("SECRET")
+
+    def test_a_present_secret_comes_from_the_environment(self, monkeypatch):
+        """Set in the environment, it resolves to that value."""
+        monkeypatch.setenv("SECRET", "from-environment")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            namespace: dict = {}
+            exec(  # noqa: S102
+                (output_dir / "env.py").read_text(encoding="utf-8"), namespace
+            )
+
+            assert namespace["__getattr__"]("SECRET") == "from-environment"
+
+    def test_no_env_file_when_the_dsl_declares_none(self):
+        """Most workflows declare no environment variables at all."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
+
+            assert not (output_dir / "env.py").exists()
 
 
 class TestChatflowShape:

@@ -3,6 +3,7 @@
 This module provides utilities for generating LangGraph code from Dify DSL.
 """
 
+from dify2langgraph.codegen.env_generator import generate_env_file
 from dify2langgraph.codegen.graph_generator import generate_graph_file
 from dify2langgraph.codegen.naming import (
     get_node_names,
@@ -17,6 +18,7 @@ from dify2langgraph.codegen.state_generator import (
 )
 
 __all__ = [
+    "generate_env_file",
     "get_node_names",
     "sanitize_class_name",
     "sanitize_function_name",

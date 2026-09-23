@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from dify2langgraph.codegen import (
+    generate_env_file,
     generate_graph_file,
     generate_nodes_directory,
     generate_package_files,
@@ -51,6 +52,7 @@ def translate(
     generate_nodes_directory(graph, output_dir, node_name_map)
     generate_graph_file(graph, output_dir, node_name_map)
     generate_package_files(graph, output_dir, node_name_map)
+    generate_env_file(graph, output_dir)
 
     # Copy template files
     copy_templates(output_dir)
