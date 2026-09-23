@@ -10,7 +10,11 @@ run does not die on a legacy Windows console codepage.
 
 from pathlib import Path
 
-from dify2langgraph.codegen.handlers import start_input_example
+from dify2langgraph.codegen.handlers import (
+    referenced_sys_fields,
+    start_input_example,
+    sys_field_type,
+)
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import WorkflowGraph
@@ -54,6 +58,18 @@ def generate_package_files(
         start_func = "start"
         start_inputs = "{}"
 
+    # A workflow that reads sys.* needs those supplied too, or the read fails
+    # the same way a missing Start input does.
+    sys_fields = referenced_sys_fields(graph)
+    if sys_fields:
+        sys_pairs = ", ".join(
+            f'"{name}": ' + ("[]" if sys_field_type(name).startswith("list") else '"example"')
+            for name in sys_fields
+        )
+        sys_entry = f', "sys": {{{sys_pairs}}}'
+    else:
+        sys_entry = ""
+
     main_content = "\n".join([
         '"""Entry point: `python -m <package>` builds and runs the workflow."""',
         "",
@@ -72,7 +88,7 @@ def generate_package_files(
         "",
         "workflow = build_graph()",
         "# Example inputs, taken from the workflow's declared variables.",
-        f'initial_state: GraphState = {{"{start_func}": {start_inputs}}}',
+        f'initial_state: GraphState = {{"{start_func}": {start_inputs}{sys_entry}}}',
         "result = workflow.invoke(initial_state)",
         "print(result)",
         "",

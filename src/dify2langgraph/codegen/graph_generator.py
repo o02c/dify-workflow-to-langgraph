@@ -35,6 +35,23 @@ def format_from_import(module: str, names: list[str]) -> list[str]:
     return [f"from {module} import (", *(f"    {name}," for name in names), ")"]
 
 
+def terminal_node_ids(graph: WorkflowGraph) -> list[str]:
+    """Node ids with no outgoing edge, in graph order.
+
+    These are what the compiled graph routes to ``END``. Type `end` is the usual
+    case, but a chatflow terminates on an `answer` node and declares no `end`
+    node at all, so the shape rather than the type decides.
+
+    Args:
+        graph: The parsed workflow.
+
+    Returns:
+        The terminal node ids.
+    """
+    with_outgoing = {edge.source_node_id for edge in graph.edges}
+    return [node_id for node_id in graph.nodes if node_id not in with_outgoing]
+
+
 def generate_graph_file(
     graph: WorkflowGraph,
     output_dir: Path,
@@ -47,13 +64,20 @@ def generate_graph_file(
         output_dir: Directory to write the generated file.
         node_name_map: Optional mapping of node_id -> (snake_case, CamelCase).
     """
+    # Computed before the import list: END is only imported when something
+    # actually reaches it, so a graph with no terminal does not carry an unused
+    # import into the generated package.
+    terminals = terminal_node_ids(graph)
+
     lines = [
         '"""Generated LangGraph workflow definition.',
         "",
         "This file is auto-generated. Do not edit directly.",
         '"""',
         "",
-        "from langgraph.graph import END, START, StateGraph",
+        "from langgraph.graph import END, START, StateGraph"
+        if terminals
+        else "from langgraph.graph import START, StateGraph",
         "",
     ]
 
@@ -124,9 +148,12 @@ def generate_graph_file(
             f'"{func_name}", route_{func_name}, {{{pairs}}})'
         )
 
-    # Add edges from end nodes to END
-    for end_node_id in graph.end_node_ids:
-        end_func, _ = get_node_names(end_node_id, node_name_map)
+    # Every node with no outgoing edge terminates the graph, not just ones of type
+    # `end`. A chatflow finishes on an `answer` node and declares no `end` at all,
+    # so keying off end_node_ids left that node dangling and left END imported but
+    # unused (ruff F401 on the generated package).
+    for node_id in terminal_node_ids(graph):
+        end_func, _ = get_node_names(node_id, node_name_map)
         lines.append(f'    graph.add_edge("{end_func}", END)')
 
     lines.extend([

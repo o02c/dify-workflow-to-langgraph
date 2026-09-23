@@ -21,6 +21,16 @@ against workflows in the wild (not just hand-written minimal cases).
     default arrives as the string `'3'`
   - an LLM node with `structured_output_enabled` whose schema an End node reads
     through a three-element selector
+- `chatflow_sys_query.yml` — also built in Dify Cloud. `mode: advanced-chat`, the
+  one shape a `mode: workflow` export cannot show:
+  - `{{#sys.query#}}` and `{{#sys.files#}}` as template strings (both in
+    `prompt_template` and in `memory.query_prompt_template`) -- `sys.query` does
+    not exist in workflow mode
+  - a Start Node with `variables: []`: in a chatflow the user's input arrives as
+    `sys.query`, not as a declared variable
+  - an `answer` node, whose `answer` field is a template referencing an upstream
+    node the same way an End Node's `value_selector` does
+  - non-numeric node ids (`llm`, `answer`)
 
 ## Real exports
 

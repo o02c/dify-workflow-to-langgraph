@@ -32,8 +32,19 @@ fall back to a placeholder (those namespaces remain deferred). `tests/test_parse
 `tests/test_handlers.py`, and `tests/test_generated.py` (End output equals the upstream value)
 cover this.
 
-Still deferred: `sys.*` / `env.*` homes, `{{#context#}}` resolution, and wiring normalized
-inputs into non-End node bodies (arrives with LLM opt-in body generation, ADR-0001).
+**`sys.*` is now implemented.** The generator declares a `SysInputs` TypedDict holding
+exactly the fields the DSL references and adds `sys: SysInputs` to `GraphState`; the caller
+supplies them at invoke time alongside the workflow inputs (ADR-0009). Selectors and template
+strings both resolve to `state["sys"]["<field>"]` — the parser already normalised the two
+syntaxes into one `VariableReference`, so only the declaration and the End/knowledge-retrieval
+resolution had to change.
+
+Only referenced fields are declared, deliberately: the `sys` catalogue is **mode-dependent**
+(`sys.query` exists in `advanced-chat` but not in `workflow`, where `sys.app_id` / `sys.user_id`
+appear instead), so a fixed list would be wrong for one mode or the other.
+
+Still deferred: `env.*` (see the findings below), `{{#context#}}` resolution, and wiring
+normalized inputs into non-End node bodies (arrives with LLM opt-in body generation, ADR-0001).
 
 ## Findings from a real export (`tests/fixtures/env_sys_workflow.yml`)
 

@@ -193,14 +193,21 @@ def _generate_nodes_init(
     ]
 
     # Import and re-export each node function
-    for node in nodes:
-        func_name, _ = get_node_names(node.id, node_name_map)
+    # Sorted, not DSL order: ruff's I001 flags an unsorted import block, and the
+    # generated package is expected to be lint-clean. Existing fixtures happened
+    # to be sorted already (numeric Dify ids ascend); a chatflow's mix of named
+    # and numeric ids is what exposed it.
+    for func_name in sorted(
+        get_node_names(node.id, node_name_map)[0] for node in nodes
+    ):
         lines.append(f"from .{func_name} import {func_name}")
 
     lines.append("")
+    # Sorted for the same reason (ruff RUF022).
     lines.append("__all__ = [")
-    for node in nodes:
-        func_name, _ = get_node_names(node.id, node_name_map)
+    for func_name in sorted(
+        get_node_names(node.id, node_name_map)[0] for node in nodes
+    ):
         lines.append(f'    "{func_name}",')
     lines.append("]")
     lines.append("")

@@ -440,18 +440,102 @@ class TestRealDslEnvSysWorkflow:
             assert '"answer": "placeholder"' in body
             assert '"random_number": 0.0' in body
 
-    def test_sys_selector_still_falls_back(self):
-        """`[sys, app_id]` has no home yet (ADR-0004), so it must not pretend to.
-
-        Documents the current deferral rather than asserting it is correct.
-        """
+    def test_sys_selector_resolves_to_the_reserved_key(self):
+        """`[sys, app_id]` reaches `state["sys"]["app_id"]` (ADR-0004)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
             translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
 
             body = (output_dir / "nodes" / "node_1785682317200.py").read_text(encoding="utf-8")
 
-            assert '"app_id": None' in body
+            assert '"app_id": state["sys"]["app_id"]' in body
+
+    def test_only_referenced_sys_fields_are_declared(self):
+        """The sys catalogue is mode-dependent, so the DSL decides what exists.
+
+        `sys.query` is chatflow-only while `sys.app_id` appears in workflow mode --
+        a fixed list would be wrong for one of them.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workflow_dir = Path(tmpdir) / "wf"
+            chat_dir = Path(tmpdir) / "chat"
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", workflow_dir)
+            translate(FIXTURES_DIR / "chatflow_sys_query.yml", chat_dir)
+
+            wf_state = (workflow_dir / "state.py").read_text(encoding="utf-8")
+            chat_state = (chat_dir / "state.py").read_text(encoding="utf-8")
+
+            def sys_block(state_source: str) -> str:
+                """The SysInputs body only -- a Start variable may share a name."""
+                return state_source.split("class SysInputs")[1].split("class ")[0]
+
+            wf_sys = sys_block(wf_state)
+            chat_sys = sys_block(chat_state)
+
+            assert "app_id: str" in wf_sys and "user_id: str" in wf_sys
+            assert "query" not in wf_sys
+            # files is a list of uploads, not an id.
+            assert "query: str" in chat_sys and "files: list[Any]" in chat_sys
+            assert "app_id" not in chat_sys
+
+    def test_env_selector_still_falls_back(self):
+        """`env` is specified as constants outside state and is not implemented.
+
+        Documents the deferral: `GraphState` has no `env` key, so emitting a state
+        access for it would generate code that cannot resolve (ADR-0004).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            state = (output_dir / "state.py").read_text(encoding="utf-8")
+
+            assert "env:" not in state
+
+
+class TestChatflowShape:
+    """A chatflow ends on an `answer` node and declares no `end` node at all."""
+
+    def test_answer_node_terminates_the_graph(self):
+        """Keying END off `end` nodes left the terminal dangling.
+
+        It also left `END` imported but unused, which ruff flags in the generated
+        package.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "chatflow_sys_query.yml", output_dir)
+
+            graph = (output_dir / "graph.py").read_text(encoding="utf-8")
+
+            assert 'graph.add_edge("answer", END)' in graph
+            assert "import END" in graph or "END, START" in graph
+
+    def test_node_all_is_sorted(self):
+        """ruff's RUF022 flags an unsorted __all__ in the generated package."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "chatflow_sys_query.yml", output_dir)
+
+            init = (output_dir / "nodes" / "__init__.py").read_text(encoding="utf-8")
+            names = [
+                line.strip().strip('",')
+                for line in init.split("__all__ = [")[1].split("]")[0].splitlines()
+                if line.strip()
+            ]
+
+            assert names == sorted(names)
+
+    def test_start_with_no_variables_is_a_passthrough(self):
+        """In a chatflow the user's input is sys.query, not a Start variable."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "chatflow_sys_query.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1790170151582.py").read_text(encoding="utf-8")
+
+            assert 'supplied.get("inputs", {})' in body
+            assert "missing" not in body
 
 
 class TestGeneratedOutputIsByteStableAcrossPlatforms:

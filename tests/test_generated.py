@@ -219,7 +219,12 @@ class TestRealWorkflows:
         state = _generate_and_run(
             tmp_path,
             "env_sys_workflow.yml",
-            {"node_1785682240366": {"query": "hello", "topk": 5.0}},
+            {
+                "node_1785682240366": {"query": "hello", "topk": 5.0},
+                # sys.* is supplied by the caller under its reserved key (ADR-0004);
+                # the End node forwards sys.app_id.
+                "sys": {"app_id": "APP-1", "user_id": "U-9"},
+            },
         )
 
         # The caller's value survives, and the declared defaults fill the rest.
@@ -227,8 +232,8 @@ class TestRealWorkflows:
         assert state["node_1785682240366"]["lang"] == "en"
         # structured_output is shaped from the schema, so End resolves through it.
         assert state["node_1785682317200"]["random_number"] == 0.0
-        # sys.* has no home yet (ADR-0004).
-        assert state["node_1785682317200"]["app_id"] is None
+        # sys.* reaches the End output from the caller's reserved key.
+        assert state["node_1785682317200"]["app_id"] == "APP-1"
 
 
     """End-to-end runs against real Dify workflow exports (see fixtures/SOURCES.md)."""
@@ -249,6 +254,19 @@ class TestRealWorkflows:
         # if-else 1721118545228: 'true' -> ...559807, 'false' -> ...668192.
         branches = {"node_1721118559807", "node_1721118668192"}
         assert len(branches & set(state)) == 1
+
+    def test_chatflow_builds_and_runs(self, tmp_path):
+        """A chatflow export runs even though it declares no `end` node.
+
+        Its terminal is an `answer` node, and its user input arrives as sys.query
+        rather than as a Start variable.
+        """
+        state = _generate_and_run(
+            tmp_path, "chatflow_sys_query.yml", {"sys": {"query": "hello", "files": []}}
+        )
+
+        assert state["sys"]["query"] == "hello"
+        assert "answer" in state
 
     def test_json_translate_workflow_builds_and_runs(self, tmp_path):
         """A real workflow using code/tool/iteration still builds and invokes.

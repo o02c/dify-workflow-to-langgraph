@@ -103,6 +103,85 @@ class NodeHandler:
         }
 
 
+# ADR-0004 reserves a `sys` key in GraphState for Dify's workflow-level runtime
+# inputs. Which ones exist is mode-dependent -- `sys.query` is chatflow-only,
+# while `sys.app_id` / `sys.user_id` appear in workflow mode -- so rather than
+# carrying a catalogue, the generator declares exactly the fields the DSL
+# references. Both reference syntaxes arrive here already normalised by the
+# parser into VariableReference(node_id="sys", ...).
+SYS_NAMESPACE = "sys"
+
+# sys.files is a list of uploaded files; everything else observed is a string id.
+_SYS_FIELD_TYPES = {"files": "list[Any]"}
+
+
+def sys_field_type(field: str) -> str:
+    """Type annotation for a `sys` field.
+
+    Args:
+        field: The field name, e.g. "query" or "files".
+
+    Returns:
+        A Python type annotation.
+    """
+    return _SYS_FIELD_TYPES.get(field, "str")
+
+
+def referenced_sys_fields(graph: WorkflowGraph) -> dict[str, str]:
+    """`sys` fields the workflow actually references, with their types.
+
+    Args:
+        graph: The parsed workflow.
+
+    Returns:
+        Field name -> type annotation, in first-seen order. Empty when the
+        workflow never reads `sys`, in which case nothing is emitted for it.
+    """
+    fields: dict[str, str] = {}
+    for node in graph.nodes.values():
+        for ref in node.references:
+            if ref.node_id == SYS_NAMESPACE and ref.field_path:
+                name = ref.field_path[0]
+                fields.setdefault(name, sys_field_type(name))
+    return fields
+
+
+def resolve_selector(
+    selector: list[Any],
+    graph: WorkflowGraph,
+    node_name_map: dict[str, tuple[str, str]] | None = None,
+) -> str | None:
+    """A Dify value_selector as a canonical state access, or None.
+
+    Args:
+        selector: A `[<source>, <field>, ...]` selector from the DSL.
+        graph: The parsed workflow, for recognising Node ids.
+        node_name_map: Optional node_id -> (snake_case, CamelCase) mapping.
+
+    Returns:
+        An expression such as ``state["llm_node"]["text"]``, or None when the
+        selector points somewhere with no home yet (`env`, an unknown node).
+    """
+    if len(selector) < 2:
+        return None
+
+    source = selector[0]
+    if source in graph.nodes:
+        key, _ = get_node_names(str(source), node_name_map)
+    elif source == SYS_NAMESPACE:
+        # ADR-0004: sys lives in state under its own reserved key.
+        key = SYS_NAMESPACE
+    else:
+        # env is specified as module constants outside state, and is not
+        # implemented yet -- see ADR-0004.
+        return None
+
+    access = f"state[{json.dumps(key)}]"
+    for part in selector[1:]:
+        access += f"[{json.dumps(str(part))}]"
+    return access
+
+
 def declared_default(var: dict[str, Any]) -> str | None:
     """A Start variable's declared default as a Python literal, or None.
 
@@ -311,11 +390,9 @@ class KnowledgeRetrievalHandler(NodeHandler):
         # dataset_ids from the Dify config.
         selector = node.data.get("query_variable_selector") or []
         dataset_ids = node.data.get("dataset_ids") or []
-        if len(selector) >= 2 and selector[0] in graph.nodes:
-            key, _ = get_node_names(str(selector[0]), node_name_map)
-            query = f'state["{key}"]'
-            for part in selector[1:]:
-                query += f'["{part}"]'
+        resolved = resolve_selector(selector, graph, node_name_map)
+        if resolved:
+            query = resolved
         else:
             query = '""'
         call = f"get_retriever().retrieve(query={query}, dataset_ids={dataset_ids!r}"
@@ -393,22 +470,15 @@ class EndHandler(NodeHandler):
     ) -> dict[str, str]:
         # The End node is deterministic: each declared output's value_selector
         # [node_id, field...] forwards an upstream value via a normalized canonical
-        # state access. Selectors into non-Node namespaces (sys/env) or unknown
-        # nodes fall back to a placeholder.
+        # state access. `sys` resolves to its reserved state key; `env` and unknown
+        # nodes still fall back to None (ADR-0004).
         result: dict[str, str] = {}
         for output in node.data.get("outputs", []):
             name = output.get("variable", "")
             if not name:
                 continue
             selector = output.get("value_selector") or []
-            if len(selector) >= 2 and selector[0] in graph.nodes:
-                key, _ = get_node_names(str(selector[0]), node_name_map)
-                access = f'state["{key}"]'
-                for part in selector[1:]:
-                    access += f'["{part}"]'
-                result[name] = access
-            else:
-                result[name] = "None"
+            result[name] = resolve_selector(selector, graph, node_name_map) or "None"
         return result or {"result": "None"}
 
 
