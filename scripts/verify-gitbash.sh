@@ -18,6 +18,7 @@
 #
 # Usage:
 #   scripts/verify-gitbash.sh [--expected-digest <hex>] [--with-llm] [--skip-docker]
+#                             [--no-copy]
 #
 # Prerequisite: uv. Installing uv alone is enough; it downloads CPython itself.
 #   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
@@ -29,6 +30,7 @@ REPO_ROOT=""
 EXPECTED_DIGEST=""
 WITH_LLM=0
 SKIP_DOCKER=0
+NO_COPY=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -36,6 +38,7 @@ while [ $# -gt 0 ]; do
     --expected-digest) EXPECTED_DIGEST="$2"; shift 2 ;;
     --with-llm) WITH_LLM=1; shift ;;
     --skip-docker) SKIP_DOCKER=1; shift ;;
+    --no-copy) NO_COPY=1; shift ;;
     -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -87,27 +90,42 @@ error_detail() {
 }
 
 # ---------------------------------------------------------------------------
-# Working copy: native processes cannot have a UNC current directory
+# Working copy: shared folders cannot host a virtualenv
 # ---------------------------------------------------------------------------
-case "$REPO_ROOT" in
-  //*|\\\\*)
-    LOCAL_ROOT="${TMPDIR:-/tmp}/d2l-repo-gitbash"
-    printf '%sRepoRoot is on a network share:%s\n  %s\n' "$C_SKIP" "$C_OFF" "$REPO_ROOT"
-    printf 'Windows cannot give a native process a UNC working directory, so\n'
-    printf 'copying to local disk first: %s\n' "$LOCAL_ROOT"
-    mkdir -p "$LOCAL_ROOT"
-    # -a would try to preserve ownership across the share and fail noisily.
-    (cd "$REPO_ROOT" && tar cf - \
-        --exclude='.git' --exclude='.venv' --exclude='__pycache__' .) \
-      | (cd "$LOCAL_ROOT" && tar xf -)
-    if [ -f "$REPO_ROOT/.env" ]; then
-      cp "$REPO_ROOT/.env" "$LOCAL_ROOT/.env"
-      printf 'Carried .env across.\n'
-    fi
-    REPO_ROOT="$LOCAL_ROOT"
-    printf 'Copied.\n'
-    ;;
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*) ON_MSYS_EARLY=1 ;;
+  *) ON_MSYS_EARLY=0 ;;
 esac
+# On Windows, copy to local disk unconditionally rather than trying to recognise
+# a share. The first attempt only matched UNC (//Mac/...), but Parallels also
+# exposes the same folder through a drive path (C:\Mac\Home\..., i.e. /c/Mac/...)
+# which slipped straight through -- and uv then failed building the venv there:
+#
+#   failed to remove directory ...\.venv\...: The parameter is incorrect. (os error 87)
+#
+# Guessing which paths are "really" local is a losing game; copying a small repo
+# costs about a second and removes the whole class. The destination name is
+# derived from the source so the venv survives between runs.
+if [ "$ON_MSYS_EARLY" -eq 1 ] && [ "$NO_COPY" -eq 0 ]; then
+  # /tmp, not $TMP: under Git Bash $TMP holds a Windows-form path
+  # (C:\Users\...\Temp) which would produce a mixed-separator string here.
+  # Git Bash's /tmp maps to that same local directory.
+  LOCAL_ROOT="/tmp/d2l-repo-gitbash"
+  printf '%sWindows host: copying the repo to local disk first.%s\n' "$C_SKIP" "$C_OFF"
+  printf '  from: %s\n  to:   %s\n' "$REPO_ROOT" "$LOCAL_ROOT"
+  printf 'A venv cannot reliably be built on a shared folder.\n'
+  mkdir -p "$LOCAL_ROOT"
+  # -a would try to preserve ownership across the share and fail noisily.
+  (cd "$REPO_ROOT" && tar cf - \
+      --exclude='./.git' --exclude='./.venv' --exclude='__pycache__' .) \
+    | (cd "$LOCAL_ROOT" && tar xf -)
+  if [ -f "$REPO_ROOT/.env" ]; then
+    cp -f "$REPO_ROOT/.env" "$LOCAL_ROOT/.env"
+    printf 'Carried .env across.\n'
+  fi
+  REPO_ROOT="$LOCAL_ROOT"
+  printf 'Copied.\n'
+fi
 
 FIXTURES="$REPO_ROOT/tests/fixtures"
 DIGEST_PY="$REPO_ROOT/scripts/output_digest.py"
@@ -199,10 +217,29 @@ run_py() {
 # venv on first use and needs PyPI for it. Letting that happen inside the first
 # check reports a network timeout as "conversion failed".
 printf '\n%sPreparing the Python environment (first run downloads dependencies)...%s\n' "$C_HEAD" "$C_OFF"
+# Hardlinking across filesystems is not supported and only produces a warning,
+# but it is noise; say up front that we do not want it.
+export UV_LINK_MODE=copy
+
 if ! PREFLIGHT="$(cd "$REPO_ROOT" && run_py --version)"; then
   printf '%sCould not prepare the environment:%s\n%s\n' "$C_FAIL" "$C_OFF" "$PREFLIGHT" >&2
-  printf 'This is an environment problem, not a product failure -- usually no route\n' >&2
-  printf 'to pypi.org, or a proxy needing HTTPS_PROXY. Stopping here.\n' >&2
+  printf '\nThis is an environment problem, not a product failure. ' >&2
+  # Name the cause rather than guessing: a filesystem error and a network
+  # timeout need completely different responses.
+  case "$PREFLIGHT" in
+    *"os error 87"*|*"failed to remove directory"*|*"Access is denied"*|*"Permission denied"*)
+      printf 'The venv could not be\n' >&2
+      printf 'built where the repo lives -- typically a shared or network folder.\n' >&2
+      printf 'Copy the repo to a local disk and re-run, or drop --no-copy.\n' >&2
+      ;;
+    *"Connect"*|*"timed out"*|*"Failed to fetch"*|*"dns"*)
+      printf 'No route to pypi.org;\n' >&2
+      printf 'a proxy may need HTTPS_PROXY set.\n' >&2
+      ;;
+    *)
+      printf 'See the output above.\n' >&2
+      ;;
+  esac
   exit 2
 fi
 printf '%sReady: %s%s\n' "$C_DIM" "$(printf '%s' "$PREFLIGHT" | tail -1)" "$C_OFF"
