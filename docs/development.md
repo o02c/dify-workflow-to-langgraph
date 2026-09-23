@@ -103,7 +103,7 @@ native process a UNC working directory, so `uv.exe` would otherwise run against
 
 The checks are grouped: **B** the converter runs, **C** console code page,
 **D** PowerShell environment variables, **F** generated workflows actually
-execute, **G** real LLM calls (opt-in via `-WithLlm`), and **E** Docker last. F is the one that matters to a customer -- it runs a generated
+execute, and **G** real LLM calls (opt-in via `-WithLlm`). F is the one that matters to a customer -- it runs a generated
 package through `scripts/run_generated.py`, which prints the final GraphState as
 ASCII-only JSON, and asserts the graph really executed: every node visited, the
 End Node forwarding an upstream value (ADR-0004), a Branching Node resolving to
@@ -175,11 +175,21 @@ rediscovered:
   one helper that drops to `Continue` for the duration of the call and reports
   via the exit code.
 
-The Docker group is skipped when no daemon is reachable. Worth knowing before
-planning that part: Docker Desktop for Windows requires WSL2, i.e. nested
-virtualization, and in Parallels Desktop nested virtualization is a Pro/Business
-feature -- on the Standard edition it cannot be enabled at all. The native checks
-need no Docker and cover the failure modes that prompted this work.
+**Docker on Windows is out of scope for this script, deliberately.** It once
+carried a Docker group that never executed even once: Docker Desktop for Windows
+requires WSL2, i.e. nested virtualization, and in Parallels Desktop nested
+virtualization is a Pro/Business feature that cannot be enabled at all on the
+Standard edition. A verification script earns its keep by being trustworthy, and
+several checks in this very script turned out to report PASS without asserting
+anything until they were actually run -- so a group that had never run was a
+liability, not coverage. It was removed rather than left to look like coverage.
+
+The container path itself is still verified, on macOS and Linux (Rancher Desktop
+or Docker Desktop), including that container output is byte-identical to a native
+run. What is unverified is specifically Docker Desktop **for Windows**: its
+bind-mount semantics, drive-letter `--mount` sources, and file ownership. A
+Windows customer should use the native path (USAGE.md section 8), which is fully
+verified in both PowerShell and Git Bash and needs no Docker at all.
 
 Generated files are written with `newline="\n"` so they are LF on every platform.
 Left to Python's default, a native Windows run would emit CRLF while the container
