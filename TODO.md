@@ -64,14 +64,16 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
     F1/F2/F3 を追加済み。グラフが実際に実行されたか（全ノード通過、End の値転送、
     分岐が 1 つに解決、資格情報なしの knowledge-retrieval が `[]`）を最終状態の
     JSON で確認する。macOS ではドライラン済み、Windows 実機はこれから
-  - [~] **Git Bash 経路の検証** — `scripts/verify-gitbash.sh` を用意（bash 3.2 互換、
-    shellcheck クリーン）。macOS で 17 passed / 0 failed まで確認済みで、残るは
-    MSYS 固有の M 群（引数のパス変換、`pwd -W`）の実機実行のみ。
-    `.gitattributes` に `*.sh text eol=lf` を追加した — CRLF の .sh は shebang が
-    `/usr/bin/env bash\r` になり Git Bash が起動すら拒否するため
-  - [ ] USAGE に **Docker 以外**の MSYS パス変換を書く — 現状 9.2 の Docker 文脈でしか
-    触れていないが、CLI に `/c/...` や `C:/...` を渡す場合も変換の影響を受ける。
-    M1/M3 が実機で通ってから記述する（未検証のことを利用ガイドに書かない）
+  - [x] **Git Bash 経路の検証** — 完了。`scripts/verify-gitbash.sh`（bash 3.2 互換、
+    shellcheck クリーン）で Windows 11 ARM64 / MINGW64 / コードページ 437 上で
+    17 passed / 0 failed。実質的な判定は PowerShell 版と同じ Python ヘルパを共有する
+    - MSYS の引数パス変換により `/c/...` と `C:/...` の両形式が CLI に届く（M1 / M3）
+    - `pwd -W` が Windows 形式を返す（M2）— USAGE 9.2 の指示の裏付け
+    - 生成物が macOS・Linux コンテナとバイト一致（B5）
+    - `.gitattributes` に `*.sh text eol=lf` を追加。CRLF の .sh は shebang が
+      `/usr/bin/env bash\r` になり Git Bash が起動すら拒否する
+    - 共有フォルダ上には venv を作れない（`os error 87`）。Windows では無条件に
+      ローカルへ複製するようにし、USAGE 8.3 にも注意として記載した
   - [ ] Windows 実機での Docker 検証（E 群）— **現状の手元環境では不可**。Docker Desktop for
     Windows は WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は
     Parallels Desktop の Pro / Business 版専用で、Standard 版では有効化できない。
