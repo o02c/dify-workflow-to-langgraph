@@ -11,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from dify2langgraph.env_vars import usable_variables
 from dify2langgraph.naming import sanitize_function_name
 
 # Pattern to match Dify variable references: {{#node_id.field#}} or {{#node_id.field.subfield#}}
@@ -130,12 +131,16 @@ class WorkflowGraph:
         edges: List of edges connecting nodes.
         start_node_id: ID of the entry point node.
         end_node_ids: IDs of terminal nodes.
+        environment_variables: Workflow-level constants declared in the DSL, each
+            with ``name``, ``value`` and ``value_type`` (``string`` / ``integer``
+            / ``secret``). Generated as module constants, not state (ADR-0004).
     """
 
     nodes: dict[str, NodeInfo]
     edges: list[EdgeInfo]
     start_node_id: str | None = None
     end_node_ids: list[str] = field(default_factory=list)
+    environment_variables: list[dict[str, Any]] = field(default_factory=list)
 
 
 class DifyDSLParser:
@@ -169,7 +174,8 @@ class DifyDSLParser:
             A WorkflowGraph instance.
         """
         # Extract workflow graph from DSL
-        graph_data = dsl_data.get("workflow", dsl_data).get("graph", {})
+        workflow_data = dsl_data.get("workflow", dsl_data)
+        graph_data = workflow_data.get("graph", {})
         nodes_data = graph_data.get("nodes", [])
         edges_data = graph_data.get("edges", [])
 
@@ -195,6 +201,13 @@ class DifyDSLParser:
             edges=edges,
             start_node_id=start_node_id,
             end_node_ids=end_node_ids,
+            # Filtered once, here, so every generator downstream agrees on which
+            # variables exist: a name that is a Python keyword or a non-secret
+            # with no value cannot be emitted, and a generator that disagreed
+            # about that produced an unimportable package.
+            environment_variables=usable_variables(
+                workflow_data.get("environment_variables") or []
+            ),
         )
 
     def _parse_node(self, node_data: dict[str, Any]) -> NodeInfo:

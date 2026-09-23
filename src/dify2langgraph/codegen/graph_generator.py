@@ -9,7 +9,7 @@ from dify2langgraph.codegen.handlers import decision_field, is_branching
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.codegen.routing import branch_map
 from dify2langgraph.logging_config import get_logger
-from dify2langgraph.parser.dsl_parser import WorkflowGraph
+from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
 
 logger = get_logger(__name__)
 
@@ -35,6 +35,46 @@ def format_from_import(module: str, names: list[str]) -> list[str]:
     return [f"from {module} import (", *(f"    {name}," for name in names), ")"]
 
 
+def _is_inside_iteration(node: NodeInfo) -> bool:
+    """Whether a node belongs to an iteration's body rather than the main flow.
+
+    Args:
+        node: The parsed node.
+
+    Returns:
+        True when the DSL marks it as nested inside an iteration.
+    """
+    return bool(node.data.get("isInIteration") or node.data.get("iteration_id"))
+
+
+def terminal_node_ids(graph: WorkflowGraph) -> list[str]:
+    """Node ids with no outgoing edge, in graph order.
+
+    These are what the compiled graph routes to ``END``. Type `end` is the usual
+    case, but a chatflow terminates on an `answer` node and declares no `end`
+    node at all, so the shape rather than the type decides.
+
+    Nodes inside an iteration are excluded. An iteration's inner nodes form their
+    own sub-graph whose last step has no outgoing edge in the DSL's flat edge
+    list, so on shape alone it looks terminal -- and wiring it to ``END`` would
+    say the whole workflow finishes when one pass of the loop body does.
+    ``json_translate.yml`` already contains one. langgraph validates neither
+    dead ends nor unreachable nodes, so nothing downstream would report it.
+
+    Args:
+        graph: The parsed workflow.
+
+    Returns:
+        The terminal node ids.
+    """
+    with_outgoing = {edge.source_node_id for edge in graph.edges}
+    return [
+        node_id
+        for node_id, node in graph.nodes.items()
+        if node_id not in with_outgoing and not _is_inside_iteration(node)
+    ]
+
+
 def generate_graph_file(
     graph: WorkflowGraph,
     output_dir: Path,
@@ -47,13 +87,20 @@ def generate_graph_file(
         output_dir: Directory to write the generated file.
         node_name_map: Optional mapping of node_id -> (snake_case, CamelCase).
     """
+    # Computed before the import list: END is only imported when something
+    # actually reaches it, so a graph with no terminal does not carry an unused
+    # import into the generated package.
+    terminals = terminal_node_ids(graph)
+
     lines = [
         '"""Generated LangGraph workflow definition.',
         "",
         "This file is auto-generated. Do not edit directly.",
         '"""',
         "",
-        "from langgraph.graph import END, START, StateGraph",
+        "from langgraph.graph import END, START, StateGraph"
+        if terminals
+        else "from langgraph.graph import START, StateGraph",
         "",
     ]
 
@@ -124,9 +171,12 @@ def generate_graph_file(
             f'"{func_name}", route_{func_name}, {{{pairs}}})'
         )
 
-    # Add edges from end nodes to END
-    for end_node_id in graph.end_node_ids:
-        end_func, _ = get_node_names(end_node_id, node_name_map)
+    # Every node with no outgoing edge terminates the graph, not just ones of type
+    # `end`. A chatflow finishes on an `answer` node and declares no `end` at all,
+    # so keying off end_node_ids left that node dangling and left END imported but
+    # unused (ruff F401 on the generated package).
+    for node_id in terminals:
+        end_func, _ = get_node_names(node_id, node_name_map)
         lines.append(f'    graph.add_edge("{end_func}", END)')
 
     lines.extend([

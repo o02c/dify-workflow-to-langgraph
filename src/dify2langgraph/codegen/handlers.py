@@ -19,9 +19,13 @@ DSL ``sourceHandle`` -- live in :mod:`dify2langgraph.codegen.routing`.
 import json
 from typing import Any
 
+from dify2langgraph.codegen.env_vars import declared_names
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.codegen.routing import default_branch_key
+from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
+
+logger = get_logger(__name__)
 
 
 def placeholder_literal(field_type: str) -> str:
@@ -103,6 +107,273 @@ class NodeHandler:
         }
 
 
+# ADR-0004 reserves a `sys` key in GraphState for Dify's workflow-level runtime
+# inputs. *Which* ones exist is mode-dependent -- `sys.query` is chatflow-only,
+# while `sys.app_id` / `sys.user_id` appear in workflow mode -- so the generator
+# declares exactly the fields the DSL references rather than a fixed set. Both
+# reference syntaxes arrive here already normalised by the parser into
+# VariableReference(node_id="sys", ...).
+SYS_NAMESPACE = "sys"
+# ADR-0004 puts env *outside* state: the DSL's environment_variables are
+# constants, emitted into a generated env.py module (see env_generator).
+ENV_NAMESPACE = "env"
+
+# Each field's *type*, by contrast, is fixed by Dify and not carried in the DSL
+# (a chatflow Start declares `variables: []`), so a name table is the only
+# source for it. Dify's own system-variable set (SystemVariableKey), not just
+# the fields our fixtures happen to use: `dialogue_count` and `timestamp` are
+# numbers, and defaulting them to `str` put `"dialogue_count": "example"` in
+# the generated entry point. RAG-pipeline-only keys are left out; they reach
+# `Any`, which is honest about not knowing rather than wrong.
+_SYS_FIELD_TYPES = {
+    "app_id": "str",
+    "conversation_id": "str",
+    "dialogue_count": "int",
+    "files": "list[Any]",
+    "query": "str",
+    "timestamp": "int",
+    "user_id": "str",
+    "workflow_id": "str",
+    "workflow_run_id": "str",
+}
+
+# Example values for `python -m <package>`, keyed by the annotation above.
+_SYS_EXAMPLE_BY_TYPE = {"int": "0", "list[Any]": "[]", "str": '"example"'}
+
+
+def sys_field_type(field: str) -> str:
+    """Type annotation for a `sys` field.
+
+    Args:
+        field: The field name, e.g. "query" or "files".
+
+    Returns:
+        A Python type annotation. `Any` for a field outside Dify's known set --
+        guessing `str` would annotate it wrongly and, worse, put a string in the
+        generated example for something that is not one.
+    """
+    return _SYS_FIELD_TYPES.get(field, "Any")
+
+
+def sys_field_example(field: str) -> str:
+    """A placeholder literal for a `sys` field, for the generated entry point.
+
+    Args:
+        field: The field name.
+
+    Returns:
+        A Python literal matching the field's type.
+    """
+    return _SYS_EXAMPLE_BY_TYPE.get(sys_field_type(field), "None")
+
+
+def referenced_sys_fields(graph: WorkflowGraph) -> dict[str, str]:
+    """`sys` fields the workflow actually references, with their types.
+
+    Args:
+        graph: The parsed workflow.
+
+    Returns:
+        Field name -> type annotation, in first-seen order. Empty when the
+        workflow never reads `sys`, in which case nothing is emitted for it.
+    """
+    fields: dict[str, str] = {}
+    for node in graph.nodes.values():
+        for ref in node.references:
+            if ref.node_id == SYS_NAMESPACE and ref.field_path:
+                name = ref.field_path[0]
+                fields.setdefault(name, sys_field_type(name))
+    return fields
+
+
+def sys_prelude(fields: list[str]) -> list[str]:
+    """Lines that reject a missing `sys` input by name.
+
+    The caller supplies `sys.*` at invoke time, the same as the workflow inputs a
+    Start Node validates -- but without this the omission surfaced as a bare
+    `KeyError: 'sys'` from inside whichever body happened to read it first, which
+    names neither the field nor who was supposed to provide it.
+
+    Args:
+        fields: The `sys` field names this node's body reads.
+
+    Returns:
+        Prelude lines, or empty when the body reads none.
+    """
+    if not fields:
+        return []
+    names = ", ".join(json.dumps(name) for name in sorted(fields))
+    return [
+        "    # Dify's sys.* values are supplied by the caller at invoke time,",
+        "    # alongside the workflow inputs:",
+        '    #     build_graph().invoke({..., "sys": {...}})',
+        '    supplied_sys = state.get("sys", {})',
+        f"    missing_sys = [name for name in ({names},) if name not in supplied_sys]",
+        "    if missing_sys:",
+        "        raise ValueError(",
+        '            "missing required sys input(s): " + ", ".join(missing_sys)',
+        "        )",
+    ]
+
+
+def referenced_sys_fields_for(node: NodeInfo) -> list[str]:
+    """The `sys` field names one node reads, in first-seen order.
+
+    Args:
+        node: The Node being generated.
+
+    Returns:
+        The field names, without duplicates.
+    """
+    seen: dict[str, None] = {}
+    for ref in node.references:
+        if ref.node_id == SYS_NAMESPACE and ref.field_path:
+            seen.setdefault(ref.field_path[0], None)
+    return list(seen)
+
+
+def resolve_selector(
+    selector: list[Any],
+    graph: WorkflowGraph,
+    node_name_map: dict[str, tuple[str, str]] | None = None,
+) -> str | None:
+    """A Dify value_selector as a canonical state access, or None.
+
+    Args:
+        selector: A `[<source>, <field>, ...]` selector from the DSL.
+        graph: The parsed workflow, for recognising Node ids.
+        node_name_map: Optional node_id -> (snake_case, CamelCase) mapping.
+
+    Returns:
+        An expression such as ``state["llm_node"]["text"]``, or None when the
+        selector names an unknown node, or an `env` variable the DSL does not
+        declare (there is no constant for the generated code to reach).
+    """
+    if len(selector) < 2:
+        return None
+
+    source = selector[0]
+    if source in graph.nodes:
+        key, _ = get_node_names(str(source), node_name_map)
+    elif source == SYS_NAMESPACE:
+        # ADR-0004: sys lives in state under its own reserved key.
+        key = SYS_NAMESPACE
+    elif source == ENV_NAMESPACE:
+        # Constants live in the generated env.py, reached as `env.NAME` after
+        # `from .. import env` -- not through state (ADR-0004). The module form is
+        # used rather than `from ..env import NAME` so a DSL variable named e.g.
+        # `state` or `output` cannot shadow a local.
+        #
+        # Only for a name env.py will actually define. Dify does not scrub stale
+        # selectors, so an export can reference a variable the author deleted;
+        # emitting `env.GONE` as executable code turns that into an AttributeError
+        # at run time, where the placeholder fallback is merely a placeholder.
+        if str(selector[1]) not in declared_names(graph.environment_variables):
+            return None
+        return ".".join([ENV_NAMESPACE, *(str(part) for part in selector[1:])])
+    else:
+        return None
+
+    access = f"state[{json.dumps(key)}]"
+    for part in selector[1:]:
+        access += f"[{json.dumps(str(part))}]"
+    return access
+
+
+def reference_access(
+    ref: Any,
+    node_name_map: dict[str, tuple[str, str]] | None = None,
+) -> str:
+    """How a parsed VariableReference is written in generated code.
+
+    The parser normalises every syntax into `state[...]`, which is right for Node
+    outputs and for `sys`, but wrong for `env`: those are module constants, and
+    `GraphState` has no `env` key. The generated comments and NODE_CONFIG block
+    feed the LLM body-generation pass, so an address that cannot resolve there
+    teaches the model to write code that fails.
+
+    Args:
+        ref: A :class:`~dify2langgraph.parser.dsl_parser.VariableReference`.
+        node_name_map: Optional node_id -> (snake_case, CamelCase) mapping.
+
+    Returns:
+        A Python expression.
+    """
+    if ref.node_id == ENV_NAMESPACE:
+        return ".".join([ENV_NAMESPACE, *ref.field_path])
+    return ref.to_state_access(node_name_map)
+
+
+def resolvable_env_references(node: NodeInfo, graph: WorkflowGraph) -> list[Any]:
+    """The node's `env.*` references that the generated `env.py` can satisfy.
+
+    A reference is only resolvable if the DSL declares the variable: `env.py` is
+    generated from `environment_variables` and is not written at all when that
+    list is empty, so a reference to an undeclared name has nothing to reach.
+    Callers use this to decide whether `from .. import env` belongs in a node
+    module -- importing on the strength of an unfiltered reference emits an
+    import of a module that may not exist, which breaks the whole package
+    (reported as a spurious "circular import") rather than the one reference.
+
+    Args:
+        node: The Node being generated.
+        graph: Parsed workflow graph, for the DSL's declared variables.
+
+    Returns:
+        The matching references, in DSL order; empty when there are none.
+    """
+    declared = declared_names(graph.environment_variables)
+    resolvable = []
+    for ref in node.references:
+        if ref.node_id != ENV_NAMESPACE:
+            continue
+        if ref.field_path and ref.field_path[0] in declared:
+            resolvable.append(ref)
+        else:
+            logger.warning(
+                "Node %r references %r, which the DSL does not declare in "
+                "environment_variables; it will stay a comment rather than code.",
+                node.id,
+                ref.raw,
+            )
+    return resolvable
+
+
+def declared_default(var: dict[str, Any]) -> str | None:
+    """A Start variable's declared default as a Python literal, or None.
+
+    Dify writes ``default: ''`` for a field where the author set no default, so an
+    empty string means absence -- which is also how Dify reads it, discarding an
+    empty string for an unsupplied optional variable.
+
+    A ``number`` default arrives as a string (``'3'``). Dify converts it with
+    ``int()`` when it has no decimal point and ``float()`` when it does, so ``'3'``
+    is ``3`` rather than ``3.0``; coercing everything to float would put "3.0"
+    into any prompt that interpolates it.
+
+    Args:
+        var: One entry of the Start Node's ``variables``.
+
+    Returns:
+        A Python literal, or None when the variable has no usable default.
+
+    Examples:
+        >>> declared_default({"type": "number", "default": "3"})
+        '3'
+        >>> declared_default({"type": "number", "default": "2.5"})
+        '2.5'
+    """
+    raw = var.get("default")
+    if raw is None or raw == "":
+        return None
+    if var.get("type") == "number":
+        try:
+            return repr(float(raw) if "." in str(raw) else int(raw))
+        except (TypeError, ValueError):
+            return None
+    return repr(raw)
+
+
 def start_variables(node: NodeInfo) -> list[dict[str, Any]]:
     """Declared workflow input variables of a Start Node, in DSL order.
 
@@ -133,10 +404,8 @@ def start_input_example(node: NodeInfo) -> str:
         return "{}"
     pairs = []
     for var in variables:
-        declared = var.get("default")
-        if declared is not None:
-            value = repr(declared)
-        else:
+        value = declared_default(var)
+        if value is None:
             value = "0.0" if var.get("type") == "number" else '"example"'
         pairs.append(f"{json.dumps(var['variable'])}: {value}")
     return "{" + ", ".join(pairs) + "}"
@@ -162,17 +431,16 @@ class StartHandler(NodeHandler):
         node_name_map: dict[str, tuple[str, str]] | None = None,
     ) -> list[str]:
         key, _ = get_node_names(node.id, node_name_map)
-        # A variable that declares a default always has a value to fall back on,
-        # so it is never "missing" even when the DSL marks it required.
-        required = [
-            v["variable"]
-            for v in start_variables(node)
-            if v.get("required") and v.get("default") is None
-        ]
+        # `required` alone decides, not whether a default exists. Dify's own
+        # `_validate_inputs` raises "<var> is required in input form" for an absent
+        # required variable and only reads `default` on the non-required branch --
+        # so accepting a required variable because it declares a default would run
+        # a workflow Dify itself would have rejected.
+        required = [v["variable"] for v in start_variables(node) if v.get("required")]
 
         lines = [
             "    # Workflow inputs are supplied by the caller in this node's own",
-            "    # state slot (ADR-0002):",
+            "    # state slot (ADR-0009):",
             f'    #     build_graph().invoke({{{json.dumps(key)}: {{...}}}})',
             f"    supplied = state.get({json.dumps(key)}, {{}})",
         ]
@@ -203,24 +471,105 @@ class StartHandler(NodeHandler):
         for var in variables:
             name = var["variable"]
             literal = json.dumps(name)
-            declared = var.get("default")
-            if declared is not None:
+            declared = declared_default(var)
+            if var.get("required"):
+                # Validated by the prelude above; indexed rather than defaulted
+                # because Dify ignores `default` for a required variable.
+                result[name] = f"supplied[{literal}]"
+            elif declared is not None:
                 # The workflow author set this in Dify; honouring it is what makes
                 # the generated package behave like the original workflow.
-                result[name] = f"supplied.get({literal}, {declared!r})"
-            elif var.get("required"):
-                result[name] = f"supplied[{literal}]"
+                result[name] = f"supplied.get({literal}, {declared})"
             else:
                 fallback = "0.0" if var.get("type") == "number" else '""'
                 result[name] = f"supplied.get({literal}, {fallback})"
         return result
 
 
+# JSON Schema type -> the annotation used in generated TypedDicts.
+_JSON_SCHEMA_TYPES = {
+    "string": "str",
+    "number": "float",
+    "integer": "int",
+    "boolean": "bool",
+    "array": "list[Any]",
+    "object": "dict[str, Any]",
+}
+
+
+def json_schema_placeholder(schema: dict[str, Any]) -> str:
+    """A placeholder literal shaped like a JSON Schema, nesting included.
+
+    A flat pass was not enough: a selector one level deeper -- the same
+    `[<node>, structured_output, person, name]` shape Dify emits for a nested
+    object -- still raised `KeyError` because the outer object was emitted as a
+    bare `{}`. The nested `properties` are in the DSL, so recurse into them.
+
+    Args:
+        schema: A JSON Schema fragment from the DSL.
+
+    Returns:
+        A Python literal. `None` for a fragment whose type cannot be read
+        (`$ref`, `anyOf`, no `type` at all): a wrong shape would be read through
+        and fail confusingly, while None is visibly a placeholder.
+    """
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        properties = schema.get("properties") or {}
+        pairs = ", ".join(
+            f"{json.dumps(name)}: {json_schema_placeholder(spec or {})}"
+            for name, spec in properties.items()
+        )
+        return "{" + pairs + "}"
+    if schema_type == "array":
+        items = schema.get("items") or {}
+        # One element, so a downstream read of `[0]` resolves. An empty list
+        # would raise IndexError the first time anything indexed it.
+        element = json_schema_placeholder(items) if items.get("type") else None
+        return f"[{element}]" if element else "[]"
+    if schema_type in _JSON_SCHEMA_TYPES:
+        return placeholder_literal(_JSON_SCHEMA_TYPES[schema_type])
+    return "None"
+
+
 class LlmHandler(NodeHandler):
     node_type = "llm"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"text": "str", "usage": "dict[str, int]"}
+        # Dify's LLM node outputs text, reasoning_content and usage. Declaring all
+        # three costs one placeholder key each and removes the KeyError a selector
+        # into reasoning_content would otherwise hit -- the same failure
+        # structured_output had. usage carries floats and a currency string, not
+        # only ints.
+        fields = {
+            "text": "str",
+            "reasoning_content": "str",
+            "usage": "dict[str, Any]",
+        }
+        # With structured output enabled, downstream nodes read through it --
+        # `[<llm id>, "structured_output", "<field>"]`. Without declaring it the
+        # generated End body raised KeyError: 'structured_output' at run time.
+        if node.data.get("structured_output_enabled"):
+            fields["structured_output"] = "dict[str, Any]"
+        return fields
+
+    def stub_output(
+        self,
+        node: NodeInfo,
+        graph: WorkflowGraph,
+        node_name_map: dict[str, tuple[str, str]] | None = None,
+    ) -> dict[str, str]:
+        result = super().stub_output(node, graph, node_name_map)
+        if "structured_output" not in result:
+            return result
+
+        # The DSL carries the schema, so the Stub can honour its shape instead of
+        # emitting {} -- otherwise a downstream read of any declared field raises.
+        schema = node.data.get("structured_output", {}).get("schema", {})
+        literal = json_schema_placeholder(schema)
+        if literal != "{}":
+            result["structured_output"] = literal
+        return result
 
 
 class KnowledgeRetrievalHandler(NodeHandler):
@@ -244,11 +593,9 @@ class KnowledgeRetrievalHandler(NodeHandler):
         # dataset_ids from the Dify config.
         selector = node.data.get("query_variable_selector") or []
         dataset_ids = node.data.get("dataset_ids") or []
-        if len(selector) >= 2 and selector[0] in graph.nodes:
-            key, _ = get_node_names(str(selector[0]), node_name_map)
-            query = f'state["{key}"]'
-            for part in selector[1:]:
-                query += f'["{part}"]'
+        resolved = resolve_selector(selector, graph, node_name_map)
+        if resolved:
+            query = resolved
         else:
             query = '""'
         call = f"get_retriever().retrieve(query={query}, dataset_ids={dataset_ids!r}"
@@ -326,22 +673,16 @@ class EndHandler(NodeHandler):
     ) -> dict[str, str]:
         # The End node is deterministic: each declared output's value_selector
         # [node_id, field...] forwards an upstream value via a normalized canonical
-        # state access. Selectors into non-Node namespaces (sys/env) or unknown
-        # nodes fall back to a placeholder.
+        # state access. `sys` resolves to its reserved state key and `env` to the
+        # generated constants module; an unknown node -- or an `env` name the DSL
+        # no longer declares -- falls back to a placeholder.
         result: dict[str, str] = {}
         for output in node.data.get("outputs", []):
             name = output.get("variable", "")
             if not name:
                 continue
             selector = output.get("value_selector") or []
-            if len(selector) >= 2 and selector[0] in graph.nodes:
-                key, _ = get_node_names(str(selector[0]), node_name_map)
-                access = f'state["{key}"]'
-                for part in selector[1:]:
-                    access += f'["{part}"]'
-                result[name] = access
-            else:
-                result[name] = "None"
+            result[name] = resolve_selector(selector, graph, node_name_map) or "None"
         return result or {"result": "None"}
 
 

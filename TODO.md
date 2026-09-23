@@ -104,7 +104,21 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 ## Deferred（要調査 / 後続）
 
 - [ ] iteration（ループ）— ループ全体が 1 ノードで内部にサブグラフを持つ表現。実 DSL 調査後に Handler 形状を決定（ADR-0005 参照）
-- [ ] `sys.*` / `env.*` の実装（住所は ADR-0004 で予約済み、実装は後追い）
+- [x] **`sys.*` の実装** — 参照されているフィールドだけを `SysInputs` として宣言し、
+  `GraphState` に `sys` を追加。呼び出し側が invoke 時に渡す（ADR-0009 と同じ扱い）。
+  selector 形式とテンプレート形式の両方が解決される。sys の構成はモード依存
+  （`sys.query` は chatflow のみ、workflow は `sys.app_id` / `sys.user_id`）なので、
+  固定の一覧は持たない
+- [x] **`env.*` の実装** — `env.py` を生成し、`env.NAME` で参照する（ADR-0004）。
+  secret は定数にせず、実行時に同名の環境変数から読む（PEP 562 の module `__getattr__`）。
+  未設定なら変数名を挙げて `RuntimeError`。DSL は secret の値を平文でエクスポートするため、
+  定数にすると顧客がコミットするソースに資格情報が入る。参照解決も
+  `state["env"][...]` から `env.NAME` に変えた（前者はコメントと NODE_CONFIG にのみ
+  現れていたが、そこは LLM 本体生成の入力そのもの）
+- [x] chatflow（`mode: advanced-chat`）の形を fixture 化 — `chatflow_sys_query.yml`。
+  `answer` 終端・`variables: []` の Start・非数値ノード ID・`{{#sys.query#}}` を含む。
+  これで生成コード品質のバグ 2 件（`END` が未使用 import になる／`__init__.py` の
+  import と `__all__` が未整列）も表面化して修正した
 - [ ] `conversation.*`（chatflow 専用、対象外）
 - [ ] 埋め込みモデル自動解決 — API 経由で不要化の見込みだが、別バックエンド採用時に再検討
 - [~] Retriever に検索設定を転送（ADR-0006、実 Dify 1.16.1 で検証）

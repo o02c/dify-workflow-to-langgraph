@@ -126,12 +126,75 @@ print(result)
 
 > **必須の入力が欠けていると実行時に失敗します。** Dify 側で `required: true` の
 > 変数は、値を捏造せず `ValueError` になります。どの変数が足りないかはメッセージに
-> 出ます。`required: false` の変数は既定値にフォールバックします。Dify 側で `default` を
-> 設定していればその値、無ければ文字列は空文字・数値は `0.0` です。`default` がある
-> 変数は `required: true` でもエラーになりません（渡すべき値が既にあるため）。
+> 出ます。**`default` が設定されていても、`required: true` なら渡さなければエラーです。**
+> これは Dify 本体と同じ挙動です（Dify の `_validate_inputs` は `required` を先に見て、
+> `default` は `required: false` の場合だけ使います）。
+>
+> `required: false` の変数は既定値にフォールバックします。Dify 側で `default` を
+> 設定していればその値、無ければ文字列は空文字・数値は `0.0` です。数値の `default` は
+> Dify と同じく小数点があれば float、なければ int になります（`'3'` → `3`）。
 
 > パッケージのディレクトリ名は有効な Python 識別子である必要があります（ハイフン不可・数字始まり不可）。
 > 入力ファイル名がこれに反する場合は、出力ディレクトリ名をリネームしてから実行してください。
+
+### Dify のシステム変数（`sys.*`）を渡す
+
+ワークフローが `sys.user_id` や `sys.query` などを参照している場合、それらは
+`"sys"` キーの下にまとめて渡します。ワークフロー入力と同じ `invoke()` の引数です。
+
+```python
+result = graph.invoke({
+    "start_node": {"query": "調べたいこと"},
+    "sys": {"app_id": "my-app", "user_id": "u-123"},
+})
+```
+
+どのフィールドが必要かは生成物の `state.py` の `SysInputs` に出ています。参照されている
+ものだけが宣言されます（`sys.query` はチャットフロー専用、`sys.app_id` / `sys.user_id` は
+ワークフロー専用など、Dify 側で使えるものがモードによって違うため）。
+
+> **渡し忘れると `ValueError: missing required sys input(s): app_id` になります。**
+> Dify 本体ではこれらはアプリや会話から自動で埋まりますが、生成物は Dify から切り離された
+> 単体の LangGraph アプリなので、呼び出し側が渡すしかありません。`python -m <pkg>` は
+> `__main__.py` に例が入っているのでそのまま動きます。
+
+### Dify の環境変数（`env.*`）
+
+Dify 側で `environment_variables` を宣言しているワークフローは、生成物に `env.py` が
+出力されます。`secret` 以外は DSL の値をそのまま定数として持ちます。
+
+```python
+from workflow import env
+print(env.API_BASE)      # DSL の値がそのまま入っている
+```
+
+**`value_type: secret` の変数は定数になりません。** Dify は secret の値を DSL に平文で
+書き出すため、そのまま定数にすると資格情報をソースに埋め込んでコミットすることになります。
+生成物は代わりに**実行時に同名の環境変数から読みます**。
+
+```bash
+export SECRET_TOKEN=...            # DSL で宣言した名前と同じ名前で渡す
+python -m workflow
+```
+
+`.env` に書いても読まれます（パッケージのあるディレクトリから上に辿ります）。
+export した環境変数の方が `.env` より優先されます。
+
+必要な環境変数の一覧は実行前に確認できます。
+
+```python
+from workflow import env
+print(env.REQUIRED_ENV_VARS)       # 例: ('SECRET_TOKEN',)
+```
+
+> **未設定のまま読むと、変数名を挙げて失敗します。**
+> `RuntimeError: environment variable 'SECRET_TOKEN' is required by this workflow
+> (declared as a secret in the Dify DSL) but is not set`。空文字を返して後続で
+> 原因不明のエラーになるより、ここで止める方を選んでいます。
+>
+> secret の名前が `PATH` や `HOME` などのシステム環境変数とぶつかると、資格情報ではなく
+> マシン側の値が黙って読まれます。変換時に警告が出るので、その場合は Dify 側で名前を
+> 変えてください。
 
 ---
 
@@ -229,12 +292,18 @@ dify2langgraph workflow.yml --llm-provider anthropic --llm-model claude-sonnet-4
 │   ├── __init__.py
 │   └── <node>.py
 ├── llm.py                # LLM 設定ヘルパー
+├── env.py                # Dify の environment_variables（宣言がある場合のみ）
 └── retriever.py          # 知識取得の Retriever（Dify Retrieval API）
 ```
 
 - ノード本体の多くは `# TODO` のプレースホルダです。ワークフローの構造（状態・エッジ・分岐）は
   正しく生成されるので、各ノードの中身を埋めていくことで完成させられます。
 - `end` ノードと `knowledge-retrieval` ノードは、そのまま動く実装が生成されます。
+- `env.py` は Dify 側で環境変数を宣言しているワークフローだけに出力されます
+  （[Dify の環境変数（`env.*`）](#dify-の環境変数env)を参照）。
+- `# TODO` のノード本体が `env.*` を参照している場合、コメントに
+  「`from .. import env` を追加せよ」と書かれています。未使用の import を生成物に
+  残さないため、本体を埋めるまで import は出力していません。
 
 ---
 

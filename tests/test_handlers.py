@@ -33,9 +33,11 @@ class TestOutputFields:
     """Each handler reports the Node Output fields for its type."""
 
     def test_llm(self):
+        """Dify's LLM node outputs reasoning_content too, so a selector can read it."""
         assert get_handler("llm").output_fields(_node("llm")) == {
             "text": "str",
-            "usage": "dict[str, int]",
+            "reasoning_content": "str",
+            "usage": "dict[str, Any]",
         }
 
     def test_code(self):
