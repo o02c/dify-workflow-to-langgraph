@@ -10,8 +10,34 @@ from dify2langgraph.parser import (
     VariableReference,
     replace_variable_references,
 )
+from dify2langgraph.parser.dsl_parser import EdgeInfo, NodeInfo, WorkflowGraph
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def _graph(node_ids: list[str], edges: list[tuple[str, str]]) -> WorkflowGraph:
+    """Build a minimal WorkflowGraph for graph-shape tests.
+
+    Hand-built rather than fixture-driven: the shapes under test (cycles, self
+    loops, orphans) are ones a real export should never contain, so there is no
+    fixture to read them from.
+
+    Args:
+        node_ids: Node ids; the first is treated as the start.
+        edges: (source, target) pairs.
+
+    Returns:
+        A WorkflowGraph with those nodes and edges.
+    """
+    return WorkflowGraph(
+        nodes={i: NodeInfo(id=i, type="llm", title=i, data={}) for i in node_ids},
+        edges=[
+            EdgeInfo(source_node_id=s, target_node_id=t, source_handle="source")
+            for s, t in edges
+        ],
+        start_node_id=node_ids[0],
+        end_node_ids=[],
+    )
 
 
 class TestVariableReference:
@@ -260,6 +286,38 @@ class TestDifyDSLParser:
         end_idx = order.index("end_node")
 
         assert start_idx < llm_idx < end_idx
+
+    def test_orphan_node_is_included(self, parser):
+        """A node with no edges has nothing to wait for, so it still appears."""
+        graph = _graph(["a", "b", "z"], [("a", "b")])
+
+        order = parser.get_dependency_order(graph)
+
+        assert sorted(order) == ["a", "b", "z"]
+        assert order.index("a") < order.index("b")
+
+    def test_cycle_raises_instead_of_dropping_nodes(self, parser):
+        """A cycle has no topological order; silently returning the rest is worse.
+
+        Kahn's algorithm never reaches the nodes in a cycle, so before this the
+        caller got a short list that looked complete -- a two-node cycle in a
+        three-node workflow returned exactly one node.
+        """
+        graph = _graph(["a", "b", "c"], [("a", "b"), ("b", "c"), ("c", "b")])
+
+        with pytest.raises(ValueError, match="cycle") as excinfo:
+            parser.get_dependency_order(graph)
+
+        # The message has to name the nodes, or the DSL is not fixable from it.
+        assert "b" in str(excinfo.value)
+        assert "c" in str(excinfo.value)
+
+    def test_self_loop_raises(self, parser):
+        """An edge from a node to itself is a cycle of length one."""
+        graph = _graph(["a", "b"], [("a", "b"), ("b", "b")])
+
+        with pytest.raises(ValueError, match="cycle"):
+            parser.get_dependency_order(graph)
 
     def test_node_titles_extracted(self, parser):
         """Test that node titles are correctly extracted."""
