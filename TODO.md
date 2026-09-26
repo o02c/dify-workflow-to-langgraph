@@ -48,7 +48,7 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [x] 未使用依存の削除 — `psycopg2-binary`（ADR-0006 の残骸）、`langchain` メタパッケージ
 - [~] **Windows ホストでの実機検証** — `scripts/verify-windows.ps1` を用意（PowerShell 5.1 互換）。
   macOS からは検証できない主張だけを対象にしている: コンソールのコードページ、PowerShell の
-  環境変数構文、パス区切り、`--mount` のドライブレター、Docker Desktop for Windows のマウント所有者。
+  環境変数構文、パス区切り。Docker は対象外（下記の判断を参照）。
   出力のバイト一致は `make verify-digest`（macOS/Linux）と `-ExpectedDigest`（Windows）で突き合わせる
   - [x] macOS 側の基準値と Linux コンテナ側の検証は完了（両者一致）
   - [x] Windows 実機でのネイティブ CLI 検証（B/C/D 群）— **完了**。
@@ -64,7 +64,7 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
     F1/F2/F3 を追加済み。グラフが実際に実行されたか（全ノード通過、End の値転送、
     分岐が 1 つに解決、資格情報なしの knowledge-retrieval が `[]`）を最終状態の
     JSON で確認する。macOS ではドライラン済み、Windows 実機はこれから
-  - [~] **Git Bash 経路の検証** — ネイティブ経路は完了、Docker 併用は未実施。`scripts/verify-gitbash.sh`（bash 3.2 互換、
+  - [x] **Git Bash 経路の検証** — 完了。`scripts/verify-gitbash.sh`（bash 3.2 互換、
     shellcheck クリーン）で Windows 11 ARM64 / MINGW64 / コードページ 437 上で
     17 passed / 0 failed。実質的な判定は PowerShell 版と同じ Python ヘルパを共有する
     - MSYS の引数パス変換により `/c/...` と `C:/...` の両形式が CLI に届く（M1 / M3）
@@ -74,13 +74,22 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
       `/usr/bin/env bash\r` になり Git Bash が起動すら拒否する
     - 共有フォルダ上には venv を作れない（`os error 87`）。Windows では無条件に
       ローカルへ複製するようにし、USAGE 8.3 にも注意として記載した
-    - [ ] **未実施**: E 群（`MSYS_NO_PATHCONV` + `pwd -W` のバインドマウント）。
-      元の懸念の中心はここだったが、VM に Docker が無いため動かせていない。
-      検証できたのは `pwd -W` が Windows 形式を返すこと（M2）まで
-  - [ ] Windows 実機での Docker 検証（E 群）— **現状の手元環境では不可**。Docker Desktop for
-    Windows は WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は
-    Parallels Desktop の Pro / Business 版専用で、Standard 版では有効化できない。
-    実施するには Parallels のエディション変更か、別の Windows 実機が要る
+    - Docker 併用（`MSYS_NO_PATHCONV=1` + `pwd -W` をバインドマウントのソースに使う形）は
+      **検証対象から外した** — 下記の判断のとおり Windows での Docker 検証自体をやめたため。
+      元の懸念の中心はここだったが、`pwd -W` が Windows 形式を返すこと（M2）までは
+      確認できている。`verify-gitbash.sh` 側の E 群も、一度も実行されていないため削除した
+  - [x] **Windows での Docker 検証は「やらない」と決めた** — Docker Desktop for Windows は
+    WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は Parallels Desktop の
+    Pro / Business 版専用で、Standard 版では有効化できない。実施には Parallels の
+    エディション変更か別の Windows 実機が必要。
+    一度も実行されないまま残っていた E 群は削除した。このスクリプトでは「実行されて
+    いない検証コードが PASS を返す」不具合を何度も踏んでいるため、動かしたことのない
+    検査を置いておくと検証結果全体の信頼性が落ちる。coverage に見えるだけの空白よりは
+    無い方がよい。
+    コンテナ経路自体は macOS / Linux で検証済み（生成物がネイティブ実行とバイト一致する
+    ことまで確認）。未検証なのは Docker Desktop **for Windows** のバインドマウント挙動・
+    ドライブレターの `--mount`・ファイル所有者の 3 点。Windows の顧客には
+    ネイティブ経路（USAGE 8 章、PowerShell と Git Bash の両方で検証済み）を案内する
 - [x] **変換時のプロバイダに google が無い** — `llm/google.py` を追加して解消。
   あわせて `--llm-model` の既定をプロバイダ追随にした（`gpt-4o-mini` 固定だったため
   `--llm-provider google` は 404、`anthropic` も同様に失敗していた）

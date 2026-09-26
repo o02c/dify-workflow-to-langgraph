@@ -3,10 +3,13 @@
     Verify the documented Windows behaviour of dify2langgraph on a real Windows host.
 
 .DESCRIPTION
-    Every check here maps to a claim made in USAGE.md sections 8 (Windows) and 9
-    (Docker) that cannot be verified from macOS or Linux: the console code page,
-    PowerShell's environment-variable syntax, path separators, and bind-mount
-    behaviour on Docker Desktop for Windows.
+    Every check here maps to a claim made in USAGE.md section 8 (Windows) that
+    cannot be verified from macOS or Linux: the console code page, PowerShell's
+    environment-variable syntax, and path separators.
+
+    Docker is deliberately out of scope. USAGE.md section 9 is verified on macOS
+    and Linux only; see docs/development.md for why Docker Desktop for Windows
+    cannot be reached from the verification environment.
 
     The script installs nothing and changes no machine settings. It writes only
     inside a temporary directory under %TEMP%.
@@ -36,9 +39,6 @@
 .PARAMETER ExpectedDigest
     Optional. The digest printed by `make verify-digest` on macOS/Linux. When
     supplied, the script asserts that Windows generates byte-identical output.
-
-.PARAMETER SkipDocker
-    Skip the Docker checks even if a Docker CLI is present.
 
 .PARAMETER NoCopy
     Use RepoRoot as given, even when it is on a network share.
@@ -81,7 +81,6 @@
 param(
     [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$ExpectedDigest = "",
-    [switch]$SkipDocker,
     [switch]$NoCopy,
     [switch]$WithLlm,
     [ValidateSet("", "openai", "anthropic", "bedrock", "google")][string]$LlmProvider = "",
@@ -944,60 +943,6 @@ if (-not $WithLlm) {
         } else {
             Add-Result "G3" "A generated workflow calls a real model at run time" "FAIL" `
                 ("llm_node.text = {0}" -f $text)
-        }
-    }
-}
-
-# ---------------------------------------------------------------------------
-# E. Docker (USAGE 9) -- optional
-# ---------------------------------------------------------------------------
-Write-Host "`n=== E. Docker (USAGE 9) ===" -ForegroundColor Cyan
-
-$dockerExe = Get-ToolPath "docker"
-if ($SkipDocker) {
-    Add-Result "E0" "Docker checks" "SKIP" "-SkipDocker was passed"
-} elseif (-not $dockerExe) {
-    Add-Result "E0" "Docker checks" "SKIP" "docker CLI not on PATH"
-} else {
-    $probe = Invoke-Native -Exe $dockerExe -Arguments @("version", "--format", "{{.Server.Version}}")
-    if ($probe.ExitCode -ne 0) {
-        Add-Result "E0" "Docker checks" "SKIP" ("daemon unreachable. Inside a Parallels VM " +
-            "this means nested virtualization, which is a Pro/Business feature and cannot be " +
-            "enabled on the Standard edition.")
-    } else {
-        Invoke-Checked "E1" "The converter image builds on Windows" {
-            $r = Invoke-Native -Exe $dockerExe -WorkDir $RepoRoot `
-                -Arguments @("build", "-t", "dify2langgraph-verify", ".")
-            if ($r.ExitCode -eq 0) {
-                Add-Result "E1" "The converter image builds on Windows" "PASS"
-            } else {
-                Add-Result "E1" "The converter image builds on Windows" "FAIL" $r.Output
-            }
-        }
-
-        Invoke-Checked "E2" "--mount handles a Windows drive-letter source path (USAGE 9)" {
-            $dockerOut = Join-Path $work "dockerout"
-            New-Item -ItemType Directory -Path $dockerOut -Force | Out-Null
-            Copy-Item -LiteralPath $fixture -Destination $dockerOut -Force
-            $r = Invoke-Native -Exe $dockerExe -Arguments @(
-                "run", "--rm", "--mount", "type=bind,source=$dockerOut,target=/work",
-                "dify2langgraph-verify", "guardduty_handler.yml", "-o", "out", "--skip-implement")
-            if ($r.ExitCode -eq 0 -and (Test-Path (Join-Parts $dockerOut "out" "guardduty_handler" "state.py"))) {
-                Add-Result "E2" "--mount handles a Windows drive-letter source path (USAGE 9)" "PASS"
-                $dr = Invoke-Python @($digestPy, "--dir", (Join-Parts $dockerOut "out" "guardduty_handler"))
-                $d = ($dr.Output -split "`n" | Select-Object -Last 1).Trim()
-                if ($d -eq $digest) {
-                    Add-Result "E3" "Container output matches the native Windows run" "PASS" $d
-                } else {
-                    Add-Result "E3" "Container output matches the native Windows run" "FAIL" `
-                        ("native    {0}`n         container {1}" -f $digest, $d)
-                }
-            } else {
-                Add-Result "E2" "--mount handles a Windows drive-letter source path (USAGE 9)" "FAIL" (Get-ErrorDetail $r.Output)
-                # Emit the row anyway; a check that silently disappears from the
-                # summary reads as "not implemented" rather than "blocked".
-                Add-Result "E3" "Container output matches the native Windows run" "SKIP" "E2 did not produce output"
-            }
         }
     }
 }

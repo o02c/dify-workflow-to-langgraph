@@ -240,10 +240,14 @@ dify2langgraph workflow.yml --llm-provider anthropic --llm-model claude-sonnet-4
 
 ## 8. Windows で使う場合
 
-> **まず [9. Docker で使う](#9-docker-で使う) を検討してください。** この章で説明する
-> 3 つの落とし穴（Python 3.13 の用意・コンソールの文字コード・シェルごとの環境変数の
-> 書き方）は、Docker で実行すればいずれも発生しません。この章は Docker を使わず
-> Windows に直接インストールする場合の手順です。
+> **Windows ではこの章の手順を第一候補にしてください。** PowerShell と Git Bash の
+> 両方で Windows 実機検証済みです（Windows 11 / PowerShell 5.1 / en-US / コードページ 437。
+> 生成物が macOS・Linux コンテナとバイト一致することまで確認しています）。
+> [9. Docker で使う](#9-docker-で使う) も使えますが、**Docker Desktop for Windows は
+> 未検証**です（理由は 9 章冒頭）。
+>
+> この章で挙げる落とし穴のうち Python 3.13 の用意は、uv を入れれば uv 自身が CPython を
+> 落としてくるので実質的に問題になりません。
 
 Windows でも同じ CLI がそのまま動きますが、次の 2 点だけ macOS / Linux と異なります。
 
@@ -358,7 +362,16 @@ dify2langgraph C:/Users/you/workflow.yml -o out --skip-implement
 
 **変換ツールを実行環境ごと**コンテナで配布する方法です。Python 3.13 の用意も、
 コンソールの文字コード設定（`PYTHONUTF8`）も、シェルごとの環境変数の書き方も不要になります。
-**Windows ではこちらを第一候補にしてください。**
+
+> **検証状況: macOS / Linux は検証済み、Windows は未検証です。**
+> macOS・Linux（Rancher Desktop / Docker Desktop）では、コンテナの出力がネイティブ実行と
+> バイト一致することまで確認しています。一方 **Docker Desktop for Windows は検証できていません**
+> — バインドマウントの挙動、ドライブレターを含む `--mount` のソース指定、ファイル所有者の
+> 3 点が未確認です。検証環境（Parallels Desktop Standard）ではネスト仮想化が有効化できず
+> WSL2 が動かないためで、見込みも立っていません。
+> **Windows では [8 章](#8-windows-で使う場合)のネイティブ実行を使ってください**（両シェルで検証済み）。
+> なお Docker Desktop は従業員数・売上が一定規模を超える企業では有償ライセンスが必要なので、
+> 顧客環境では社内申請の対象になり得ます。
 
 > **対象は変換ツールだけです。** 生成された LangGraph パッケージには Dockerfile も
 > `requirements.txt` も出力されません。生成物はお手元の既存 Python 環境で実行する前提です

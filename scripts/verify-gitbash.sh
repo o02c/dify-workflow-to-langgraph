@@ -8,6 +8,11 @@
 # rewriting helps in some places and breaks things in others, and USAGE.md makes
 # claims about it (sections 8.2 and 9.2) that nothing checked until now.
 #
+# Docker is out of scope, deliberately. `pwd -W` -- the piece of USAGE 9.2 that is
+# Git-Bash-specific -- is checked (M2), but the bind mount it feeds is not: Docker
+# Desktop for Windows cannot be reached from the verification environment, so a
+# Docker group here would never execute. See docs/development.md.
+#
 # Companion to scripts/verify-windows.ps1, which covers the PowerShell-specific
 # claims. Both delegate the substantive work to the same two Python helpers
 # (scripts/output_digest.py, scripts/run_generated.py) so the two shells cannot
@@ -17,7 +22,7 @@
 # script gets exercised before being handed to a Windows host.
 #
 # Usage:
-#   scripts/verify-gitbash.sh [--expected-digest <hex>] [--with-llm] [--skip-docker]
+#   scripts/verify-gitbash.sh [--expected-digest <hex>] [--with-llm]
 #                             [--no-copy] [--repo-root <path>]
 #
 # Prerequisite: uv. Installing uv alone is enough; it downloads CPython itself.
@@ -29,7 +34,6 @@ set -u
 REPO_ROOT=""
 EXPECTED_DIGEST=""
 WITH_LLM=0
-SKIP_DOCKER=0
 NO_COPY=0
 
 while [ $# -gt 0 ]; do
@@ -39,7 +43,6 @@ while [ $# -gt 0 ]; do
     --expected-digest) [ $# -ge 2 ] || { echo "--expected-digest needs a value" >&2; exit 2; }
                        EXPECTED_DIGEST="$2"; shift 2 ;;
     --with-llm) WITH_LLM=1; shift ;;
-    --skip-docker) SKIP_DOCKER=1; shift ;;
     --no-copy) NO_COPY=1; shift ;;
     -h|--help) sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -507,60 +510,6 @@ INJECT_OK=$?
   fi
 else
   add_result C0 SKIP "Console encoding checks" "the generator's stub shape changed"
-fi
-
-# ---------------------------------------------------------------------------
-# E. Docker (USAGE 9.2) -- optional
-# ---------------------------------------------------------------------------
-section "E. Docker (USAGE 9.2)"
-
-if [ "$SKIP_DOCKER" -eq 1 ]; then
-  add_result E0 SKIP "Docker checks" "--skip-docker was passed"
-elif ! command -v docker >/dev/null 2>&1; then
-  add_result E0 SKIP "Docker checks" "docker CLI not on PATH"
-elif ! docker version --format '{{.Server.Version}}' >/dev/null 2>&1; then
-  add_result E0 SKIP "Docker checks" \
-    "daemon unreachable (in a Parallels VM: nested virtualization is Pro/Business only)"
-else
-  E1_OUT="$(cd "$REPO_ROOT" && docker build -q -t dify2langgraph-gitbash . 2>&1)"
-  if [ $? -eq 0 ]; then
-    add_result E1 PASS "The converter image builds"
-  else
-    add_result E1 FAIL "The converter image builds" "$(error_detail "$E1_OUT")"
-  fi
-
-  DOCKER_OUT="$WORK/dockerout"
-  mkdir -p "$DOCKER_OUT"
-  cp "$FIXTURES/guardduty_handler.yml" "$DOCKER_OUT/"
-  # MSYS_NO_PATHCONV and pwd -W are the two Git-Bash-specific readings in
-  # USAGE 9.2: without them MSYS rewrites target=/work into a host path.
-  if [ "$ON_MSYS" -eq 1 ]; then
-    MOUNT_SRC="$(cd "$DOCKER_OUT" && pwd -W)"
-  else
-    MOUNT_SRC="$DOCKER_OUT"
-  fi
-  E2_OUT="$(MSYS_NO_PATHCONV=1 docker run --rm \
-      --mount "type=bind,source=$MOUNT_SRC,target=/work" \
-      dify2langgraph-gitbash guardduty_handler.yml -o out --skip-implement 2>&1 || true)"
-  if [ -f "$DOCKER_OUT/out/guardduty_handler/state.py" ]; then
-    add_result E2 PASS "MSYS_NO_PATHCONV + pwd -W give a working bind mount (USAGE 9.2)"
-    E2_DIGEST="$(run_py "$DIGEST_PY" --dir "$DOCKER_OUT/out/guardduty_handler" | tail -1 | tr -d '\r')"
-    case "$E2_DIGEST" in
-      [0-9a-f]*) ;;
-      *) E2_DIGEST="(unavailable)" ;;
-    esac
-    # Both being the same error string is not a match.
-    if [ "$E2_DIGEST" = "$DIGEST" ] && [ "$E2_DIGEST" != "(unavailable)" ]; then
-      add_result E3 PASS "Container output matches the native run" "$E2_DIGEST"
-    else
-      add_result E3 FAIL "Container output matches the native run" \
-        "native $DIGEST, container $E2_DIGEST"
-    fi
-  else
-    add_result E2 FAIL "MSYS_NO_PATHCONV + pwd -W give a working bind mount (USAGE 9.2)" \
-      "$(error_detail "$E2_OUT")"
-    add_result E3 SKIP "Container output matches the native run" "E2 produced no output"
-  fi
 fi
 
 # ---------------------------------------------------------------------------
