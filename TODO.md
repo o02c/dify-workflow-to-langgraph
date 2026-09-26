@@ -48,7 +48,7 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [x] 未使用依存の削除 — `psycopg2-binary`（ADR-0006 の残骸）、`langchain` メタパッケージ
 - [~] **Windows ホストでの実機検証** — `scripts/verify-windows.ps1` を用意（PowerShell 5.1 互換）。
   macOS からは検証できない主張だけを対象にしている: コンソールのコードページ、PowerShell の
-  環境変数構文、パス区切り、`--mount` のドライブレター、Docker Desktop for Windows のマウント所有者。
+  環境変数構文、パス区切り。Docker は対象外（下記の判断を参照）。
   出力のバイト一致は `make verify-digest`（macOS/Linux）と `-ExpectedDigest`（Windows）で突き合わせる
   - [x] macOS 側の基準値と Linux コンテナ側の検証は完了（両者一致）
   - [x] Windows 実機でのネイティブ CLI 検証（B/C/D 群）— **完了**。
@@ -69,10 +69,18 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
     **実機未検証**。MSYS2 のパス変換は `target=/work` にも及ぶので、ここを外すと
     マウント先が化ける。検証は `verify-windows.ps1` の bash 版を起こすか、
     B/C 群をシェル非依存な形に切り出して両方から呼ぶ形が考えられる
-  - [ ] Windows 実機での Docker 検証（E 群）— **現状の手元環境では不可**。Docker Desktop for
-    Windows は WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は
-    Parallels Desktop の Pro / Business 版専用で、Standard 版では有効化できない。
-    実施するには Parallels のエディション変更か、別の Windows 実機が要る
+  - [x] **Windows での Docker 検証は「やらない」と決めた** — Docker Desktop for Windows は
+    WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は Parallels Desktop の
+    Pro / Business 版専用で、Standard 版では有効化できない。実施には Parallels の
+    エディション変更か別の Windows 実機が必要。
+    一度も実行されないまま残っていた E 群は削除した。このスクリプトでは「実行されて
+    いない検証コードが PASS を返す」不具合を何度も踏んでいるため、動かしたことのない
+    検査を置いておくと検証結果全体の信頼性が落ちる。coverage に見えるだけの空白よりは
+    無い方がよい。
+    コンテナ経路自体は macOS / Linux で検証済み（生成物がネイティブ実行とバイト一致する
+    ことまで確認）。未検証なのは Docker Desktop **for Windows** のバインドマウント挙動・
+    ドライブレターの `--mount`・ファイル所有者の 3 点。Windows の顧客には
+    ネイティブ経路（USAGE 8 章、PowerShell と Git Bash の両方で検証済み）を案内する
 - [x] **変換時のプロバイダに google が無い** — `llm/google.py` を追加して解消。
   あわせて `--llm-model` の既定をプロバイダ追随にした（`gpt-4o-mini` 固定だったため
   `--llm-provider google` は 404、`anthropic` も同様に失敗していた）
