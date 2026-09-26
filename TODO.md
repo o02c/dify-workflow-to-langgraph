@@ -64,9 +64,13 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
     F1/F2/F3 を追加済み。グラフが実際に実行されたか（全ノード通過、End の値転送、
     分岐が 1 つに解決、資格情報なしの knowledge-retrieval が `[]`）を最終状態の
     JSON で確認する。macOS ではドライラン済み、Windows 実機はこれから
-  - [x] **Git Bash 経路の検証** — 完了。`scripts/verify-gitbash.sh`（bash 3.2 互換、
+  - [~] **Git Bash 経路の検証** — `scripts/verify-gitbash.sh`（bash 3.2 互換、
     shellcheck クリーン）で Windows 11 ARM64 / MINGW64 / コードページ 437 上で
     17 passed / 0 failed。実質的な判定は PowerShell 版と同じ Python ヘルパを共有する
+    - [ ] **Windows での再実行が未了。** この 17 passed はレビュー修正より前の実測で、
+      その後に検査ロジック自体が変わっている: B3 は常に PASS だったところに FAIL 分岐を
+      追加、C1 は PASS / FAIL の判定を組み替え、M4 は新規追加でまだ一度も Windows で
+      走っていない。両スクリプトを VM でもう一度通すまで「検証済み」とは言えない
     - MSYS の引数パス変換により `/c/...` と `C:/...` の両形式が CLI に届く（M1 / M3）
     - `pwd -W` が Windows 形式を返す（M2）— USAGE 9.2 の指示の裏付け
     - 生成物が macOS・Linux コンテナとバイト一致（B5）
