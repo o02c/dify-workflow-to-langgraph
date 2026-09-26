@@ -3,9 +3,15 @@
 # prints it, so a stale archive is obvious in the first few lines of output
 # instead of being mistaken for a behaviour difference on the Windows host.
 scripts/verify-windows.ps1 export-subst
+scripts/verify-gitbash.sh export-subst
 
 # Git for Windows defaults to core.autocrlf=true, which would give a clone CRLF
 # working-tree copies of templates/*.py. Those are copied verbatim into the
 # generated package, so the output would stop being byte-identical across
 # platforms (ADR-0001) even though every generator pins newline="\n".
 *.py text eol=lf
+
+# A shell script with CRLF is not merely untidy -- the shebang becomes
+# "/usr/bin/env bash\r" and Git Bash refuses to start it at all:
+#     env: bash\r: No such file or directory
+*.sh text eol=lf

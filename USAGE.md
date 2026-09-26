@@ -304,13 +304,49 @@ PowerShell / コマンドプロンプトでは使えません。以下に読み�
 | `PYTHONPATH=src python -m ...` | `$env:PYTHONPATH = "src"` の後に `python -m ...` | `set PYTHONPATH=src` の後に `python -m ...` |
 
 **Git Bash を使う場合は、左端の bash 列がそのまま使えます。** `export VAR=値` も
-`VAR=値 command` も期待どおり動きます。ただし Docker と組み合わせるときだけは
-パス変換に注意が必要です（[9.2](#92-変換する)参照）。
+`VAR=値 command` も期待どおり動きます（実機で確認済み）。パスの扱いと Docker と
+併用する際の注意は [8.3](#83-git-bash-の場合) を参照してください。
 
 環境変数を使わず、実行ディレクトリに `.env` ファイルを置く方法（[5 章](#5-rag知識取得の設定)参照）
 が最も移植性が高くおすすめです。
 
-### 8.3 補足
+### 8.3 Git Bash の場合
+
+環境変数は bash と同じ書き方が使えます（[8.2](#82-環境変数の指定方法) の左端の列）。
+パスについては、**Git Bash 形式（`/c/Users/you/wf.yml`）と Windows 形式
+（`C:/Users/you/wf.yml`）のどちらでも渡せます**。Git Bash は MSYS2 上で動いており、
+ネイティブのプログラムを起動する際に前者を後者へ自動変換するためです。
+
+```bash
+dify2langgraph /c/Users/you/workflow.yml -o out --skip-implement   # どちらでも可
+dify2langgraph C:/Users/you/workflow.yml -o out --skip-implement
+```
+
+> **エクスプローラからコピーしたパスは引用符で囲んでください。** `C:\Users\you\wf.yml`
+> のようなバックスラッシュ区切りは、囲まないと bash がバックスラッシュを取り除いて
+> しまい（`C:Usersyouwf.yml`）CLI に届きません。囲めばそのまま使えます。
+>
+> ```bash
+> dify2langgraph "C:\Users\you\workflow.yml" -o out --skip-implement
+> ```
+
+> **Docker と組み合わせるときだけ、この自動変換が邪魔になります。** 変換は
+> `target=/work` のようなコンテナ内パスにも及ぶためです。[9.2](#92-変換する) の
+> `MSYS_NO_PATHCONV=1` と `$(pwd -W)` を使ってください。
+
+> **ネットワークドライブや共有フォルダ上に仮想環境を作らないでください。**
+> [2 章 B](#b-そのままソースとして使う) の手順でリポジトリをそこに置いて `uv sync`
+> すると、`The parameter is incorrect. (os error 87)` のような失敗をします
+> （Parallels の共有フォルダで実測）。リポジトリをローカルディスクに複製してから
+> 作業してください。
+>
+> `uv` には仮想環境の場所だけを移す `UV_PROJECT_ENVIRONMENT` がありますが、uv 自身の
+> ドキュメントが「複数プロジェクトで共有すると上書きし合うので CI やコンテナ向け」と
+> していること、およびこの構成を検証していないことから、ここでは推奨しません。
+> [2 章 A](#a-パッケージとしてインストール推奨) の `pip install .` は共有フォルダ上に
+> 仮想環境を作らないため、この問題を受けません。
+
+### 8.4 補足
 
 - パス区切りは `\` / `/` どちらでも動作します（内部で `pathlib` を使用）。
 - 生成物の改行コードは OS に関わらず常に **LF** です。Windows でネイティブ実行しても

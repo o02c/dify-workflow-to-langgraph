@@ -30,10 +30,11 @@
     Path to a checkout (or `git archive` export) of this repository. Defaults to
     the parent of this script's directory.
 
-    If this resolves to a UNC path such as \\Mac\Home\... (a Parallels shared
-    folder), the script copies it to local disk first: Windows cannot give a
-    native process a UNC working directory, so uv and python would silently run
-    against C:\Windows instead. Pass -NoCopy to suppress that.
+    On Windows the script copies it to local disk before doing anything. A native
+    process cannot have a UNC working directory, and a virtualenv cannot reliably
+    be built on a shared folder at all -- including one reached through a drive
+    path such as C:\Mac\Home\... rather than \\Mac\Home\... Pass -NoCopy to
+    suppress the copy.
 
 .PARAMETER ExpectedDigest
     Optional. The digest printed by `make verify-digest` on macOS/Linux. When
@@ -264,16 +265,24 @@ function Get-PathKey {
 
 $originalRepoRoot = $RepoRoot
 
-if (-not $NoCopy -and $RepoRoot.StartsWith("\\")) {
+# Windows hosts always get a local copy. Matching only UNC missed the case that
+# actually bit in the Git Bash run: Parallels exposes the same share through a
+# drive path (C:\Mac\Home\..., no leading \\), and uv then failed building the
+# venv there with "The parameter is incorrect. (os error 87)". Guessing which
+# paths are really local is a losing game, so copy unconditionally.
+$onWindowsEarly = ($PSVersionTable.PSEdition -eq "Desktop") -or ($IsWindows -eq $true)
+
+if (-not $NoCopy -and $onWindowsEarly) {
     # Deterministic name, not a fresh GUID: robocopy then updates the copy in
     # place and the .venv uv builds there survives between runs. With a new
     # directory every time, uv re-resolves from PyPI on each run -- which is slow
     # and turns any network hiccup into a cascade of unrelated check failures.
     $localRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("d2l-repo-" + (Get-PathKey $RepoRoot))
-    Write-Host "RepoRoot is on a network share:" -ForegroundColor Yellow
-    Write-Host "  $RepoRoot" -ForegroundColor Yellow
-    Write-Host "Windows cannot give uv.exe or python.exe a UNC working directory," -ForegroundColor Yellow
-    Write-Host "so copying to local disk first: $localRoot" -ForegroundColor Yellow
+    Write-Host "Windows host: copying the repo to local disk first." -ForegroundColor Yellow
+    Write-Host "  from: $RepoRoot" -ForegroundColor Yellow
+    Write-Host "  to:   $localRoot" -ForegroundColor Yellow
+    Write-Host "A venv cannot reliably be built on a shared folder, and a native" -ForegroundColor Yellow
+    Write-Host "process cannot have a UNC working directory." -ForegroundColor Yellow
     New-Item -ItemType Directory -Path $localRoot -Force | Out-Null
 
     # robocopy rather than Copy-Item. Copy-Item needs a trailing wildcard to copy
@@ -294,8 +303,11 @@ if (-not $NoCopy -and $RepoRoot.StartsWith("\\")) {
     # .env is gitignored, so it is never in a `git archive` export and is placed
     # beside it by hand. Copy it explicitly rather than trusting the bulk copy to
     # pick up a dotfile across an SMB share.
+    # Only with -WithLlm: this copy persists in %TEMP% between runs, so carrying
+    # credentials there unconditionally leaves a stale copy working after the real
+    # .env is gone.
     $srcEnv = Join-Path $originalRepoRoot ".env"
-    if (Test-Path $srcEnv) {
+    if ($WithLlm -and (Test-Path $srcEnv)) {
         Copy-Item -LiteralPath $srcEnv -Destination (Join-Path $localRoot ".env") -Force
         Write-Host "Carried .env across." -ForegroundColor Yellow
     }
@@ -482,11 +494,11 @@ Invoke-Checked "B3" "Generated files use LF, not CRLF (cross-platform determinis
     }
 }
 
-Invoke-Checked "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" {
+Invoke-Checked "B4" "Backslash and forward-slash paths both work (USAGE 8.4)" {
     if (-not $onWindows) {
         # Only Windows accepts both separators; elsewhere a backslash is an
         # ordinary character in a filename, so the check has nothing to assert.
-        Add-Result "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" "SKIP" `
+        Add-Result "B4" "Backslash and forward-slash paths both work (USAGE 8.4)" "SKIP" `
             "Windows-only claim; this host is not Windows"
         return
     }
@@ -498,9 +510,9 @@ Invoke-Checked "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" {
         -and (Test-Path (Join-Parts $bs "guardduty_handler" "state.py")) `
         -and (Test-Path (Join-Parts $fs "guardduty_handler" "state.py"))
     if ($ok) {
-        Add-Result "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" "PASS"
+        Add-Result "B4" "Backslash and forward-slash paths both work (USAGE 8.4)" "PASS"
     } else {
-        Add-Result "B4" "Backslash and forward-slash paths both work (USAGE 8.3)" "FAIL" `
+        Add-Result "B4" "Backslash and forward-slash paths both work (USAGE 8.4)" "FAIL" `
             ("backslash exit={0}, slash exit={1}`n{2}" -f $r1.ExitCode, $r2.ExitCode, $r1.Output)
     }
 }
