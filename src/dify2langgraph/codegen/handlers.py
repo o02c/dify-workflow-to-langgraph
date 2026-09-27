@@ -22,6 +22,7 @@ from typing import Any
 from dify2langgraph.codegen.env_vars import declared_names
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.codegen.routing import default_branch_key
+from dify2langgraph.codegen.var_types import annotation
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
 
@@ -232,6 +233,198 @@ def referenced_sys_fields_for(node: NodeInfo) -> list[str]:
     return list(seen)
 
 
+def _annotated_selector_types(graph: WorkflowGraph) -> dict[tuple[str, str], str]:
+    """`(source node id, field)` -> Python annotation, from the DSL's own labels.
+
+    Wherever the DSL points at another node's output it usually annotates the
+    selector with the type it expects -- End outputs, and the `variables` list of a
+    code / template-transform node, all carry `value_selector` next to
+    `value_type`. Collected generically rather than per Node type, because the
+    pairing is a DSL convention rather than a per-type one.
+
+    Args:
+        graph: The parsed workflow.
+
+    Returns:
+        A lookup used to type fields that no handler declared.
+    """
+    types: dict[tuple[str, str], str] = {}
+
+    def walk(obj: Any) -> None:
+        if isinstance(obj, dict):
+            selector = obj.get("value_selector")
+            if isinstance(selector, list) and len(selector) >= 2 and "value_type" in obj:
+                key = (str(selector[0]), str(selector[1]))
+                types.setdefault(key, annotation(obj.get("value_type")))
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    for node in graph.nodes.values():
+        walk(node.data)
+    return types
+
+
+def _paths_read_from(node_id: str, graph: WorkflowGraph) -> list[list[str]]:
+    """Every field path other nodes read out of one node, deduplicated.
+
+    Args:
+        node_id: The node whose outputs are being read.
+        graph: The parsed workflow.
+
+    Returns:
+        Field paths, e.g. ``[["body"], ["headers", "x-request-id"]]``.
+    """
+    seen: list[list[str]] = []
+    for other in graph.nodes.values():
+        for ref in other.references:
+            if ref.node_id != node_id or not ref.field_path:
+                continue
+            path = [str(part) for part in ref.field_path]
+            if path not in seen:
+                seen.append(path)
+    return seen
+
+
+def _placeholder_for_paths(paths: list[list[str]], leaf: str) -> str:
+    """A literal shaped so every one of `paths` resolves when read.
+
+    A selector may reach deeper than one field (``[node, "headers", "x"]``). A flat
+    placeholder satisfies the first step and raises on the second, so the nesting is
+    rebuilt from the paths themselves -- the same idea as
+    :func:`json_schema_placeholder`, applied to selector paths instead of a schema.
+
+    Args:
+        paths: Field paths below a single field, relative to that field.
+        leaf: The literal to use where a path ends.
+
+    Returns:
+        A Python expression source.
+    """
+    if not paths or any(not path for path in paths):
+        return leaf
+    grouped: dict[str, list[list[str]]] = {}
+    for path in paths:
+        grouped.setdefault(path[0], []).append(path[1:])
+    pairs = ", ".join(
+        f"{json.dumps(name)}: {_placeholder_for_paths(rest, leaf)}"
+        for name, rest in grouped.items()
+    )
+    return "{" + pairs + "}"
+
+
+def derived_output_fields(node: NodeInfo, graph: WorkflowGraph) -> dict[str, str]:
+    """Fields other nodes read from this node that no handler declared.
+
+    The safety net. A Node type the generator does not know gets the fallback's
+    single `output` field, so a downstream selector reading the type's real output
+    raised `KeyError` at run time -- conversion succeeded and the package crashed.
+    Rather than racing Dify's node catalogue, take the DSL's word for it: whatever
+    something reads from this node is declared on it.
+
+    Args:
+        node: The Node being generated.
+        graph: The parsed workflow.
+
+    Returns:
+        Field name -> annotation, for fields the handler does not already declare.
+    """
+    handler_fields = get_handler(node.type).output_fields(node)
+    annotated = _annotated_selector_types(graph)
+    derived: dict[str, str] = {}
+    for path in _paths_read_from(node.id, graph):
+        name = path[0]
+        if name in handler_fields or name in derived or not name.isidentifier():
+            continue
+        derived[name] = annotated.get((node.id, name), "Any")
+    return derived
+
+
+def effective_output_fields(node: NodeInfo, graph: WorkflowGraph) -> dict[str, str]:
+    """What the generated `TypedDict` declares for a node.
+
+    Args:
+        node: The Node being generated.
+        graph: The parsed workflow.
+
+    Returns:
+        The handler's declaration, plus anything the DSL reads that it missed.
+        The handler wins on conflicts -- it knows the type, the DSL only knows a
+        label.
+    """
+    fields = dict(get_handler(node.type).output_fields(node))
+    fields.update(derived_output_fields(node, graph))
+    return fields
+
+
+def effective_stub_output(
+    node: NodeInfo,
+    graph: WorkflowGraph,
+    node_name_map: dict[str, tuple[str, str]] | None = None,
+) -> dict[str, str]:
+    """The node body's output dict, matching :func:`effective_output_fields`.
+
+    Emitted from the same place as the declaration so the two cannot drift: a
+    field in `state.py` that the body never writes is still a `KeyError`.
+
+    Args:
+        node: The Node being generated.
+        graph: The parsed workflow.
+        node_name_map: Optional node_id -> (snake_case, CamelCase) mapping.
+
+    Returns:
+        Field name -> Python expression source.
+    """
+    handler = get_handler(node.type)
+    values = dict(handler.stub_output(node, graph, node_name_map))
+    derived = derived_output_fields(node, graph)
+    if not derived:
+        return values
+    paths = _paths_read_from(node.id, graph)
+    for name, field_type in derived.items():
+        if name in values:
+            continue
+        below = [path[1:] for path in paths if path[0] == name]
+        values[name] = _placeholder_for_paths(below, placeholder_literal(field_type))
+    return values
+
+
+def declared_output_fields(node: NodeInfo) -> dict[str, str] | None:
+    """The node's own output declaration from the DSL, if it carries one.
+
+    A `code` node declares its outputs in the DSL, with types::
+
+        outputs:
+          body_head: { type: string }
+          rows:      { type: array[object] }
+
+    Reading that beats any table we could keep: it is the workflow author's own
+    answer, it is exact, and it needs no knowledge of Dify. The generator used to
+    emit an invented `result` / `stdout` / `stderr` instead -- `stdout` and `stderr`
+    are not Dify outputs at all -- so a downstream read of a declared name raised
+    `KeyError` at run time.
+
+    Args:
+        node: The Node being generated.
+
+    Returns:
+        Field name -> Python annotation, or None when the node declares nothing in
+        this shape (the End node's `outputs` is a *list*, a different thing).
+    """
+    declared = node.data.get("outputs")
+    if not isinstance(declared, dict) or not declared:
+        return None
+    fields: dict[str, str] = {}
+    for name, spec in declared.items():
+        if not isinstance(name, str) or not name.isidentifier():
+            continue
+        spec_type = spec.get("type") if isinstance(spec, dict) else None
+        fields[name] = annotation(spec_type)
+    return fields or None
+
+
 def resolve_selector(
     selector: list[Any],
     graph: WorkflowGraph,
@@ -421,7 +614,10 @@ class StartHandler(NodeHandler):
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
         fields: dict[str, str] = {}
         for var in start_variables(node):
-            fields[var["variable"]] = "float" if var.get("type") == "number" else "str"
+            # Dify's full variable vocabulary, not just number-vs-everything: a
+            # `file-list` input is a list, and a real export can omit `type`
+            # entirely (which resolves to Any rather than a guessed str).
+            fields[var["variable"]] = annotation(var.get("type"))
         return fields or {"inputs": "dict[str, Any]"}
 
     def body_prelude(
@@ -629,7 +825,10 @@ class CodeHandler(NodeHandler):
     node_type = "code"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"result": "Any", "stdout": "str", "stderr": "str"}
+        # The DSL declares them (see declared_output_fields). The previous fixed
+        # set was invented: Dify's code node has no `stdout` / `stderr` outputs,
+        # and `result` only exists when the author happened to name it that.
+        return declared_output_fields(node) or {}
 
 
 class ToolHandler(NodeHandler):
@@ -662,7 +861,8 @@ class EndHandler(NodeHandler):
         for output in node.data.get("outputs", []):
             name = output.get("variable", "")
             if name:
-                fields[name] = "Any"
+                # Each declared output carries the type of what it forwards.
+                fields[name] = annotation(output.get("value_type"))
         return fields or {"result": "Any"}
 
     def stub_output(

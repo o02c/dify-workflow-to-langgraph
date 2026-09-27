@@ -1,0 +1,300 @@
+app:
+  description: ''
+  icon: 🤖
+  icon_background: '#FFEAD5'
+  icon_type: emoji
+  mode: workflow
+  name: http-request_code_error-strategy
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+version: 0.7.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .JPG
+      - .JPEG
+      - .PNG
+      - .GIF
+      - .WEBP
+      - .SVG
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      fileUploadConfig:
+        attachment_image_file_size_limit: 2
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        file_upload_limit: 50
+        image_file_batch_limit: 10
+        image_file_size_limit: 10
+        knowledge_file_size_limit: 15
+        single_chunk_attachment_limit: 10
+        skill_file_size_limit: 50
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: http-request
+      id: 1790523813130-source-1790523828855-target
+      source: '1790523813130'
+      sourceHandle: source
+      target: '1790523828855'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: http-request
+        targetType: code
+      id: 1790523828855-source-1790523864798-target
+      source: '1790523828855'
+      sourceHandle: source
+      target: '1790523864798'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: http-request
+        targetType: template-transform
+      id: 1790523828855-fail-branch-1790524102325-target
+      source: '1790523828855'
+      sourceHandle: fail-branch
+      target: '1790524102325'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: end
+      id: 1790523864798-source-1790524186925-target
+      source: '1790523864798'
+      sourceHandle: source
+      target: '1790524186925'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: template-transform
+        targetType: end
+      id: 1790524102325-source-1790524186925-target
+      source: '1790524102325'
+      sourceHandle: source
+      target: '1790524186925'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        selected: true
+        title: User Input
+        type: start
+        variables:
+        - default: ''
+          hint: ''
+          label: url
+          options: []
+          placeholder: ''
+          required: true
+          type: text-input
+          variable: url
+      height: 109
+      id: '1790523813130'
+      position:
+        x: 78.90758983142689
+        y: 282
+      positionAbsolute:
+        x: 78.90758983142689
+        y: 282
+      selected: true
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          data: []
+          type: none
+        error_strategy: fail-branch
+        headers: ''
+        method: get
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: false
+        ssl_verify: true
+        timeout:
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+        title: HTTP Request
+        type: http-request
+        url: '{{#1790523813130.url#}}'
+        variables: []
+      height: 160
+      id: '1790523828855'
+      position:
+        x: 380.9075898314269
+        y: 295.1089220228775
+      positionAbsolute:
+        x: 380.9075898314269
+        y: 295.1089220228775
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        code: "\ndef main(body: string):\n    return {\n        \"body_head\": body[:100]\n\
+          \    }\n"
+        code_language: python3
+        outputs:
+          body_head:
+            children: null
+            type: string
+        selected: false
+        title: Code
+        type: code
+        variables:
+        - value_selector:
+          - '1790523828855'
+          - body
+          value_type: string
+          variable: body
+      height: 52
+      id: '1790523864798'
+      position:
+        x: 706.9406135400357
+        y: 295.1089220228775
+      positionAbsolute:
+        x: 706.9406135400357
+        y: 295.1089220228775
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        selected: false
+        template: '- status code: {{ status_code }}
+
+          - error type: {{ error_type }}
+
+
+          ```
+
+          {{ error_message }}
+
+          ```
+
+          '
+        title: Template
+        type: template-transform
+        variables:
+        - value_selector:
+          - '1790523828855'
+          - status_code
+          value_type: number
+          variable: status_code
+        - value_selector:
+          - '1790523828855'
+          - error_message
+          value_type: string
+          variable: error_message
+        - value_selector:
+          - '1790523828855'
+          - error_type
+          value_type: string
+          variable: error_type
+      height: 52
+      id: '1790524102325'
+      position:
+        x: 706.9406135400357
+        y: 399.21784404575504
+      positionAbsolute:
+        x: 706.9406135400357
+        y: 399.21784404575504
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        outputs:
+        - value_selector:
+          - '1790523864798'
+          - body_head
+          value_type: string
+          variable: body_head
+        - value_selector:
+          - '1790524102325'
+          - output
+          value_type: string
+          variable: error_output
+        selected: false
+        title: Output
+        type: end
+      height: 114
+      id: '1790524186925'
+      position:
+        x: 1008.9406135400357
+        y: 295.1089220228775
+      positionAbsolute:
+        x: 1008.9406135400357
+        y: 295.1089220228775
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    viewport:
+      x: 2.644365050235592
+      y: 19.67700067934038
+      zoom: 0.9154070776420636
+  rag_pipeline_variables: []

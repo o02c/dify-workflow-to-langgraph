@@ -41,11 +41,32 @@ class TestOutputFields:
         }
 
     def test_code(self):
-        assert get_handler("code").output_fields(_node("code")) == {
-            "result": "Any",
-            "stdout": "str",
-            "stderr": "str",
+        """A code node's outputs come from the DSL, which declares them with types.
+
+        The previous fixed set was invented: Dify's code node has no `stdout` or
+        `stderr` output, and `result` exists only when the author named it that.
+        A downstream read of a declared name therefore raised KeyError at run time.
+        """
+        node = _node("code", {
+            "type": "code",
+            "outputs": {
+                "body_head": {"type": "string", "children": None},
+                "rows": {"type": "array[object]", "children": None},
+            },
+        })
+
+        assert get_handler("code").output_fields(node) == {
+            "body_head": "str",
+            "rows": "list[dict[str, Any]]",
         }
+
+    def test_code_declaring_nothing(self):
+        """Declaring no outputs means no outputs; nothing is invented for it.
+
+        What a downstream selector reads is still declared, by the safety net in
+        effective_output_fields (see test_translator/test_generated).
+        """
+        assert get_handler("code").output_fields(_node("code")) == {}
 
     def test_start_uses_declared_variables(self):
         node = _node(
@@ -131,11 +152,19 @@ class TestStubOutput:
     """The Stub body's placeholder values, including the branching default."""
 
     def test_generic_placeholders(self):
+        """Each declared field gets a literal of its own declared type."""
         handler = get_handler("code")
-        node = _node("code")
+        node = _node("code", {
+            "type": "code",
+            "outputs": {
+                "body_head": {"type": "string", "children": None},
+                "count": {"type": "number", "children": None},
+                "rows": {"type": "array[object]", "children": None},
+            },
+        })
         # graph is unused for a non-branching node's stub.
         stub = handler.stub_output(node, graph=None)  # type: ignore[arg-type]
-        assert stub == {"result": "None", "stdout": '"placeholder"', "stderr": '"placeholder"'}
+        assert stub == {"body_head": '"placeholder"', "count": "0.0", "rows": "[]"}
 
     def test_branching_defaults_decision_field_to_first_branch_key(self):
         graph = DifyDSLParser().parse_file(FIXTURES_DIR / "ifelse_workflow.yml")
