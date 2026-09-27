@@ -451,6 +451,31 @@ def declared_output_fields(node: NodeInfo) -> dict[str, str] | None:
     return fields or None
 
 
+def node_output_access(state_key: str, parts: list[str]) -> str:
+    """How generated code reads a field out of another node's output.
+
+    `.get` rather than `[...]` because the node may not have run: when two branches
+    converge, the one that was not taken has no entry in state at all. Dify resolves
+    an unavailable reference to None, and this mirrors that.
+
+    Used for both the code the generator emits *and* the "How to access input
+    variables" comments it writes for whoever fills in a body. Those two had drifted
+    apart -- the comment advised `state["x"]["y"]` a few lines above code that used
+    `.get` -- so anyone following the comment wrote the form that crashes.
+
+    Args:
+        state_key: The source node's canonical state key.
+        parts: The field path below it, at least one element.
+
+    Returns:
+        A Python expression source.
+    """
+    access = f"state.get({json.dumps(state_key)}, {{}}).get({json.dumps(parts[0])})"
+    for part in parts[1:]:
+        access = f"({access} or {{}}).get({json.dumps(part)})"
+    return access
+
+
 def resolve_selector(
     selector: list[Any],
     graph: WorkflowGraph,
@@ -514,11 +539,7 @@ def resolve_selector(
     # fields now derived from the DSL (effective_output_fields), a field a node
     # declares is always present once the node runs -- so None means "that branch
     # did not run".
-    parts = [str(part) for part in selector[1:]]
-    access = f"state.get({json.dumps(key)}, {{}}).get({json.dumps(parts[0])})"
-    for part in parts[1:]:
-        access = f"({access} or {{}}).get({json.dumps(part)})"
-    return access
+    return node_output_access(key, [str(part) for part in selector[1:]])
 
 
 def reference_access(
@@ -542,7 +563,12 @@ def reference_access(
     """
     if ref.node_id == ENV_NAMESPACE:
         return ".".join([ENV_NAMESPACE, *ref.field_path])
-    return ref.to_state_access(node_name_map)
+    if ref.node_id == SYS_NAMESPACE or not ref.field_path:
+        # sys is supplied for every run, and a field-less reference has no path to
+        # build; both keep the plain indexed form.
+        return ref.to_state_access(node_name_map)
+    key, _ = get_node_names(ref.node_id, node_name_map)
+    return node_output_access(key, [str(part) for part in ref.field_path])
 
 
 def resolvable_env_references(node: NodeInfo, graph: WorkflowGraph) -> list[Any]:
