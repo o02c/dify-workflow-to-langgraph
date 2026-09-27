@@ -49,7 +49,7 @@ _Avoid_: decision node, switch
 A generated `route_<node>(state)` function that reads a Branching Node's output and returns the branch key mapped (deterministically, from `sourceHandle`) to the next Node.
 
 **Node Handler**:
-The unit of Node-type support. One handler per Dify Node type, exposing `output_fields()`, `generate_body()`, and `routing()`; unknown types use a fallback handler that emits a Stub. Adding Node-type coverage means adding a handler (see docs/adr/0005).
+The unit of Node-type support. One handler per Dify Node type, exposing `output_fields()`, `stub_output()`, `body_prelude()` / `body_imports()`, and the `is_branching` / `decision_field` attributes; unknown types use a fallback handler that emits a Stub, and anything the DSL reads from them is declared anyway (see docs/adr/0005). Adding Node-type coverage means adding a handler (see docs/adr/0005).
 _Avoid_: plugin, adapter, converter (reserve "adapter" for Retriever backends)
 
 **Retriever**:
