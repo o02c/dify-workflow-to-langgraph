@@ -744,7 +744,9 @@ class TestOutputFieldsComeFromTheDsl:
         http = state["node_1790523828855"]
         assert http["body"] == "placeholder"
         assert http["status_code"] == 0.0
-        assert http["error_message"] == "placeholder"
+        # Left unset on purpose: the generated router reads error_message to pick
+        # the branch, and a successful run has no error in Dify either.
+        assert http["error_message"] is None
 
     def test_a_selector_deeper_than_one_field_resolves(self, tmp_path):
         """`[node, "headers", "x-request-id"]` needs a nested placeholder.
@@ -847,3 +849,62 @@ class TestBranchThatDidNotRun:
         assert state["end_true"]["taken"] == "placeholder"
         assert state["end_true"]["skipped"] is None
         assert "br_false" not in state
+
+
+class TestFailBranchIsABranch:
+    """`error_strategy: fail-branch` makes a node route, not fan out.
+
+    Dify exports a second outgoing edge with `sourceHandle: fail-branch` beside the
+    ordinary `source` one. Emitting both as unconditional edges meant the failure
+    path ran on a successful run -- the same bug ADR-0003 exists to prevent.
+    """
+
+    _FIXTURE = "error_strategy_workflow.yml"
+    _INITIAL = {"node_1790523813130": {"url": "https://example.com"}}
+
+    def test_only_one_path_runs(self, tmp_path):
+        """The template node is on the failure branch and must stay unvisited."""
+        state = _generate_and_run(tmp_path, self._FIXTURE, self._INITIAL)
+
+        assert "node_1790523864798" in state  # success branch: the code node
+        assert "node_1790524102325" not in state  # failure branch: the template
+
+    def test_the_graph_uses_a_conditional_edge_keyed_by_the_dsl_handles(self, tmp_path):
+        translate(FIXTURES_DIR / self._FIXTURE, tmp_path / _PKG)
+
+        graph = (tmp_path / _PKG / "graph.py").read_text(encoding="utf-8")
+
+        assert 'graph.add_edge("node_1790523828855"' not in graph
+        assert "add_conditional_edges(\"node_1790523828855\"" in graph
+        assert "'source': 'node_1790523864798'" in graph
+        assert "'fail-branch': 'node_1790524102325'" in graph
+
+    def test_the_router_branches_on_dify_s_own_error_output(self, tmp_path):
+        """No invented field: Dify injects error_message only on the failure path.
+
+        It carries the chosen branch out of band (NodeRunResult.edge_source_handle),
+        so there is no Dify output naming it -- but error_message's presence is
+        exactly equivalent, and it is a real Dify output.
+        """
+        translate(FIXTURES_DIR / self._FIXTURE, tmp_path / _PKG)
+
+        graph = (tmp_path / _PKG / "graph.py").read_text(encoding="utf-8")
+
+        assert 'state["node_1790523828855"].get("error_message")' in graph
+        assert '"fail-branch" if' in graph
+
+    def test_the_stub_takes_the_success_path(self, tmp_path):
+        """A stubbed graph resolves to exactly one successor, as elsewhere.
+
+        The placeholder for a `str` field is "placeholder", which is truthy -- so
+        leaving error_message at its default would have sent every run down the
+        failure branch.
+        """
+        translate(FIXTURES_DIR / self._FIXTURE, tmp_path / _PKG)
+
+        body = (tmp_path / _PKG / "nodes" / "node_1790523828855.py").read_text(
+            encoding="utf-8"
+        )
+
+        assert '"error_message": None' in body
+        assert '"error_message": "placeholder"' not in body

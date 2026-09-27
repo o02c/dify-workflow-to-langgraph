@@ -355,6 +355,10 @@ def effective_output_fields(node: NodeInfo, graph: WorkflowGraph) -> dict[str, s
         label.
     """
     fields = dict(get_handler(node.type).output_fields(node))
+    if node.data.get("error_strategy"):
+        # Both of Dify's error strategies inject these, so a node with error
+        # handling enabled can always be read for them.
+        fields.update(ERROR_OUTPUT_FIELDS)
     fields.update(derived_output_fields(node, graph))
     return fields
 
@@ -380,14 +384,21 @@ def effective_stub_output(
     handler = get_handler(node.type)
     values = dict(handler.stub_output(node, graph, node_name_map))
     derived = derived_output_fields(node, graph)
-    if not derived:
-        return values
     paths = _paths_read_from(node.id, graph)
     for name, field_type in derived.items():
         if name in values:
             continue
         below = [path[1:] for path in paths if path[0] == name]
         values[name] = _placeholder_for_paths(below, placeholder_literal(field_type))
+
+    if uses_fail_branch(node):
+        # The generated router reads error_message to decide the branch, so a Stub
+        # that left it at "placeholder" would route every run down the failure path.
+        # Unset is also what Dify has on a successful run, and it keeps the
+        # convention that a stubbed graph resolves to exactly one successor.
+        for name in ERROR_OUTPUT_FIELDS:
+            if name in values:
+                values[name] = "None"
     return values
 
 
@@ -988,11 +999,62 @@ def get_handler(node_type: str) -> NodeHandler:
     return _HANDLERS.get(node_type, _FALLBACK)
 
 
+FAIL_BRANCH_STRATEGY = "fail-branch"
+FAIL_BRANCH_HANDLE = "fail-branch"
+SUCCESS_HANDLE = "source"
+# Dify injects exactly these two on either error strategy, and on the fail path they
+# are the *only* outputs present (engine/event/node_failure.py).
+ERROR_OUTPUT_FIELDS = {"error_message": "str", "error_type": "str"}
+
+
+def uses_fail_branch(node: NodeInfo) -> bool:
+    """Whether the DSL routes this node's failures to a separate branch.
+
+    Args:
+        node: The Node being generated.
+
+    Returns:
+        True when `error_strategy: fail-branch` is set.
+    """
+    return node.data.get("error_strategy") == FAIL_BRANCH_STRATEGY
+
+
 def is_branching(node: NodeInfo) -> bool:
-    """Whether this node routes conditionally (needs add_conditional_edges)."""
-    return get_handler(node.type).is_branching
+    """Whether this node routes conditionally (needs add_conditional_edges).
+
+    Two sources. The handler, for types that branch by nature (question-classifier,
+    if-else). And `error_strategy: fail-branch` on any node: Dify exports a second
+    outgoing edge with `sourceHandle: fail-branch` beside the ordinary `source` one,
+    and promotes the node to a branch. Without this the generator emitted both as
+    unconditional edges, so **the failure path ran even when the node succeeded** --
+    the same bug ADR-0003 exists to prevent, arriving through a different door.
+    """
+    return get_handler(node.type).is_branching or uses_fail_branch(node)
 
 
 def decision_field(node: NodeInfo) -> str | None:
     """The Node Output field whose value selects the branch (None if not branching)."""
     return get_handler(node.type).decision_field
+
+
+def decision_expression(node: NodeInfo, func_name: str) -> str:
+    """The expression a generated router returns to pick a branch.
+
+    Args:
+        node: The branching Node.
+        func_name: The node's canonical state key.
+
+    Returns:
+        Python expression source evaluating to a DSL `sourceHandle`.
+    """
+    handler = get_handler(node.type)
+    if handler.is_branching:
+        return f'state["{func_name}"]["{handler.decision_field}"]'
+    # A fail-branch node has no Dify output naming the branch -- Dify carries it out
+    # of band, as NodeRunResult.edge_source_handle. What it *does* do is inject
+    # error_message only on the failure path, so presence of that is the signal. No
+    # invented field, and a Stub that leaves it unset takes the success branch.
+    return (
+        f'"{FAIL_BRANCH_HANDLE}" if state["{func_name}"].get("error_message")'
+        f' else "{SUCCESS_HANDLE}"'
+    )

@@ -5,7 +5,7 @@ This module generates the graph.py file with StateGraph construction.
 
 from pathlib import Path
 
-from dify2langgraph.codegen.handlers import decision_field, is_branching
+from dify2langgraph.codegen.handlers import decision_expression, is_branching
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.codegen.routing import branch_map
 from dify2langgraph.logging_config import get_logger
@@ -114,13 +114,12 @@ def generate_graph_file(
     branching_nodes = [n for n in graph.nodes.values() if is_branching(n)]
     for node in branching_nodes:
         func_name, _ = get_node_names(node.id, node_name_map)
-        field = decision_field(node)
         lines.extend([
             "",
             "",
             f"def route_{func_name}(state: GraphState) -> str:",
             f'    """Route for branching node: {node.title} ({node.type})."""',
-            f'    return state["{func_name}"]["{field}"]',
+            f"    return {decision_expression(node, func_name)}",
         ])
 
     lines.extend([
