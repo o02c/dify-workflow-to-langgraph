@@ -751,3 +751,41 @@ class TestGeneratedCodeIsLintClean:
             )
 
         assert result.returncode == 0, f"ruff findings:\n{result.stdout}{result.stderr}"
+
+
+class TestGuidanceMatchesGeneratedCode:
+    """The "How to access input variables" comments are instructions people follow.
+
+    They are the only place a developer is told how to reach an upstream value, and
+    they sit a few lines above code doing the same thing. When the two drifted, the
+    comment advised `state["x"]["y"]` while the generator itself used `.get` -- so
+    following the comment produced the form that raises KeyError on a branch that was
+    not taken.
+    """
+
+    def test_the_comment_and_the_body_use_the_same_access_form(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "error_strategy_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1790524186925.py").read_text(
+                encoding="utf-8"
+            )
+
+            access = 'state.get("node_1790524102325", {}).get("output")'
+            assert f"# 1790524102325.output -> {access}" in body
+            assert f'"error_output": {access},' in body
+            assert 'state["node_1790524102325"]' not in body
+
+    def test_sys_keeps_the_plain_indexed_form(self):
+        """It is supplied for every run, and a missing field is rejected by name."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1785682317200.py").read_text(
+                encoding="utf-8"
+            )
+
+            assert '# sys.app_id -> state["sys"]["app_id"]' in body
+            assert '"app_id": state["sys"]["app_id"],' in body

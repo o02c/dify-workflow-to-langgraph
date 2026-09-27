@@ -1,51 +1,42 @@
 # Dify DSL to LangGraph Converter
 
-Dify のワークフロー DSL (YAML) を解析し、実行可能で型安全な LangGraph Python パッケージを自動生成するツールです。
+**Dify で作ったワークフローを、Dify なしで動く Python のプログラムに変換するツールです。**
 
-変換の中核は**決定論的**（同じ DSL からは常に同じコード）。LLM による補助（スタブ実装の自動埋め・lint 自動修正・ノード名の意味的リネーム）は**オプトインの後処理**です。
+Dify の画面から書き出したファイル（`.yml`）を渡すと、同じ流れをたどる Python の
+プログラム一式が出てきます。社内のサーバーに組み込む、処理を自分で書き換える、
+といった使い方ができます。
 
-> **使い方は [USAGE.md](USAGE.md)（利用ガイド）を参照してください。**
+> **使い方はすべて [USAGE.md](USAGE.md)（利用ガイド）に書いてあります。**
+> あの 1 ファイルだけで使い始められるようにしてあるので、まずそちらを読んでください。
 
-## 変換パイプライン
+## できること・できないこと
 
-```mermaid
-flowchart LR
-    DSL[("Dify DSL<br/>(YAML)")] --> Parser
-    subgraph Parser["解析"]
-        P1[ノード/エッジ抽出] --> P2["変数参照解析<br/>{{#id.field#}} / value_selector"]
-    end
-    Parser --> Codegen
-    subgraph Codegen["コード生成 (決定論)"]
-        C1[state.py] ~~~ C2[nodes/*.py] ~~~ C3[graph.py]
-    end
-    Codegen --> Opt
-    subgraph Opt["任意の後処理 (LLM)"]
-        O1[スタブ実装埋め] ~~~ O2[lint 自動修正]
-    end
-```
+自動で作られるのは**処理の骨組み**です。処理の順序・条件分岐・値の受け渡しの形・
+ワークフローの入力の受け取り・終了ノードの値の受け渡し・知識取得（RAG）は、
+そのまま動く形で出力されます。
 
-## 特徴
+一方 **LLM ノードやコードノードなど、個々のノードの処理そのものは空のまま**で、
+`# TODO` のしるしが付いて出てきます。そこを埋めるのは利用者の作業です。
+空のままでもプログラムは最後まで動くので、先に全体の流れを確認できます。
 
-- **決定論的な構造生成** — 状態（`GraphState`）・ノード登録・エッジ・分岐の配線を、同じ入力から常に同じコードとして生成します。
-- **型安全** — 1 ノード = 1 キーの `TypedDict` 状態。存在しないノード参照は静的に検知できます。
-- **分岐に対応** — question-classifier / if-else を `add_conditional_edges` + 生成された Router として graph.py に可視化します。
-- **RAG 対応** — knowledge-retrieval は Dify の Retrieval API を、差し替え可能な `Retriever` ポートの背後で呼び出します。
-- **自己完結パッケージ** — 生成物は相対 import の Python パッケージで、`python -m <pkg>` で実行できます。
+空の部分を AI に下書きさせる機能もありますが、任意です。**使わなければ変換は
+インターネットに一切つながりません。**
 
-## クイックスタート
+## 最短の試し方
 
 ```bash
-# インストール（同梱の pyproject.toml を利用）
+# インストール（同梱の pyproject.toml を使います）
 pip install .
 
-# 変換（LLM 不要・決定論的にコードだけ生成）
+# 変換（AI もインターネットも使いません）
 dify2langgraph workflow.yml -o output/ --skip-implement
 
-# 生成物を実行（親ディレクトリから）
+# 動かす（できたフォルダの 1 つ上から）
 cd output && python -m workflow
 ```
 
-Python を用意せずに変換だけしたい場合は、同梱の `Dockerfile` からビルドして使えます。
+Python を用意せずに変換したい場合は、同梱の `Dockerfile` からビルドして使う方法も
+あります（macOS / Linux で動作確認済み。Windows は未確認です）。
 
 ```bash
 docker build -t dify2langgraph . && docker run --rm \
@@ -53,13 +44,9 @@ docker build -t dify2langgraph . && docker run --rm \
   dify2langgraph workflow.yml -o outputs --skip-implement
 ```
 
-詳しい CLI オプション・RAG や LLM の設定・生成物の構造は **[USAGE.md](USAGE.md)** を参照してください。
-
-> Windows では [USAGE.md「8. Windows で使う場合」](USAGE.md#8-windows-で使う場合) を
-> 参照してください。PowerShell と Git Bash の両方で実機検証済みです。
-> [Docker](USAGE.md#9-docker-で使う) も使えますが **Docker Desktop for Windows は未検証**です。
-> 直接インストールする場合は
-> [USAGE.md「8. Windows で使う場合」](USAGE.md#8-windows-で使う場合) を参照してください。
+> **Windows でも動きます。** PowerShell と Git Bash の両方で実機確認済みです。
+> 文字化けを防ぐ設定など、Windows 特有の注意は
+> [USAGE.md「9. Windows で使う場合」](USAGE.md#9-windows-で使う場合) にあります。
 
 ## ライセンス
 
