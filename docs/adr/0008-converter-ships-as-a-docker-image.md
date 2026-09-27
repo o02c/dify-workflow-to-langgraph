@@ -123,5 +123,21 @@ ruff and ty are present. The Bedrock path was exercised against a real
 `sso_session` profile with `~/.aws` mounted read-write: `--name-nodes` succeeded in
 `ap-northeast-1` via both environment variables and `--aws-region`/`--aws-profile`,
 and with an expired token it produced botocore's "Token has expired and refresh
-failed" followed by our `aws sso login --profile ...` hint. Windows and Linux hosts
-have not been exercised.
+failed" followed by our `aws sso login --profile ...` hint.
+
+**Windows and Linux hosts have not been exercised, and Windows is not going to be.**
+Docker Desktop for Windows needs WSL2, i.e. nested virtualization, which Parallels
+Desktop gates behind its Pro/Business editions -- so the verification environment
+cannot reach it at any setting. `scripts/verify-windows.ps1` briefly carried a
+Docker group; it never executed once, and a check that has never run is a liability
+in a script whose value rests on its results being trustworthy, so it was removed
+rather than left looking like coverage.
+
+The consequence for the decision above: **Docker is no longer the recommended path
+on Windows.** It was, on the strength of removing three portability problems. Two of
+those turned out not to need it -- the native path is now verified end to end in both
+PowerShell and Git Bash, and `uv` provisions CPython itself -- while Docker Desktop
+also carries a paid-licence threshold that makes it an internal-approval item at
+exactly the customers this was meant to help. Windows customers are pointed at the
+native path (USAGE.md section 8); the image remains the packaged option for macOS
+and Linux, where it is verified.

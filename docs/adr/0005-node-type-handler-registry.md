@@ -22,3 +22,22 @@ reads `is_branching` / `decision_field` from it (structural branch-map derivatio
 Inspected against the real `json_translate.yml` fixture, an `iteration` container currently maps
 to the fallback Stub (its child sub-graph is left unwired) — consistent with iteration being
 deferred. `tests/test_handlers.py` covers the registry.
+
+## Amendment: the LLM handler's outputs
+
+A Stub's declared output fields are a contract downstream selectors read through, so a
+missing one is a run-time `KeyError` in the generated package rather than a cosmetic gap.
+Three were missing.
+
+- **`structured_output`** was not declared at all, so a real export using structured output
+  crashed the moment the End node read through it. It is declared when
+  `structured_output_enabled` is set, and the Stub is *shaped from the DSL's own schema* so a
+  selector into a declared field resolves.
+- That shaping was flat at first, which fixed the crash only at depth 1: a nested object was
+  emitted as a bare `{}`, so `[<llm>, structured_output, person, name]` raised the identical
+  `KeyError` one level down. It recurses now, and an `array` of objects gets one element so an
+  indexed read resolves. A fragment whose type cannot be read (`$ref`, `anyOf`, no `type`)
+  becomes `None` — visibly a placeholder rather than a wrong shape.
+- **`reasoning_content`** is part of Dify's LLM node output and was absent, so a selector into
+  it failed the same way. `usage` is typed `dict[str, Any]`: Dify's usage carries floats and a
+  currency string, not only ints.

@@ -18,3 +18,25 @@ per-type `decision_field`, `branch_map` from `sourceHandle`). `graph_generator.p
 defaults the decision field of a Branching Node's stub to the first branch key so the graph
 resolves to a single successor and runs end-to-end before bodies are implemented.
 `tests/test_generated.py::test_question_classifier_routes_to_single_branch` guards the behavior.
+
+## Amendment: which nodes reach `END`
+
+Terminal edges were keyed off node **type** `end`. A chatflow declares no `end`
+node at all — it finishes on an `answer` node — so its graph had a dangling
+terminal and `END` imported but unused. The rule is now **shape**: a node with no
+outgoing edge reaches `END`.
+
+Shape alone is not sufficient, though. An iteration's body is a sub-graph whose
+last step has no outgoing edge in the DSL's flat edge list, so it looks terminal —
+and wiring it to `END` asserts that the whole workflow finishes when one pass of
+the loop body does. `tests/fixtures/json_translate.yml` contains exactly that node
+(`合并`, `isInIteration: true`). Nodes the DSL marks as inside an iteration are
+therefore excluded.
+
+This was silent: langgraph's `StateGraph.validate` rejects neither dead ends nor
+unreachable nodes, so nothing downstream would have reported it. It is inert today
+only because the iteration sub-graph has no incoming edge; it becomes a premature-
+termination bug the moment `iteration` is implemented.
+
+`END` is imported only when something reaches it, since an unused import is a lint
+failure in the generated package (ADR-0007).

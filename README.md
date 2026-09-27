@@ -55,9 +55,10 @@ docker build -t dify2langgraph . && docker run --rm \
 
 詳しい CLI オプション・RAG や LLM の設定・生成物の構造は **[USAGE.md](USAGE.md)** を参照してください。
 
-> Windows では [USAGE.md「9. Docker で使う」](USAGE.md#9-docker-で使う) を推奨します。
-> Python 3.13 の用意・コンソールの文字コード設定（`PYTHONUTF8=1`）・シェルごとの環境変数の
-> 書き方がすべて不要になります。直接インストールする場合は
+> Windows では [USAGE.md「8. Windows で使う場合」](USAGE.md#8-windows-で使う場合) を
+> 参照してください。PowerShell と Git Bash の両方で実機検証済みです。
+> [Docker](USAGE.md#9-docker-で使う) も使えますが **Docker Desktop for Windows は未検証**です。
+> 直接インストールする場合は
 > [USAGE.md「8. Windows で使う場合」](USAGE.md#8-windows-で使う場合) を参照してください。
 
 ## ライセンス

@@ -126,12 +126,75 @@ print(result)
 
 > **必須の入力が欠けていると実行時に失敗します。** Dify 側で `required: true` の
 > 変数は、値を捏造せず `ValueError` になります。どの変数が足りないかはメッセージに
-> 出ます。`required: false` の変数は既定値にフォールバックします。Dify 側で `default` を
-> 設定していればその値、無ければ文字列は空文字・数値は `0.0` です。`default` がある
-> 変数は `required: true` でもエラーになりません（渡すべき値が既にあるため）。
+> 出ます。**`default` が設定されていても、`required: true` なら渡さなければエラーです。**
+> これは Dify 本体と同じ挙動です（Dify の `_validate_inputs` は `required` を先に見て、
+> `default` は `required: false` の場合だけ使います）。
+>
+> `required: false` の変数は既定値にフォールバックします。Dify 側で `default` を
+> 設定していればその値、無ければ文字列は空文字・数値は `0.0` です。数値の `default` は
+> Dify と同じく小数点があれば float、なければ int になります（`'3'` → `3`）。
 
 > パッケージのディレクトリ名は有効な Python 識別子である必要があります（ハイフン不可・数字始まり不可）。
 > 入力ファイル名がこれに反する場合は、出力ディレクトリ名をリネームしてから実行してください。
+
+### Dify のシステム変数（`sys.*`）を渡す
+
+ワークフローが `sys.user_id` や `sys.query` などを参照している場合、それらは
+`"sys"` キーの下にまとめて渡します。ワークフロー入力と同じ `invoke()` の引数です。
+
+```python
+result = graph.invoke({
+    "start_node": {"query": "調べたいこと"},
+    "sys": {"app_id": "my-app", "user_id": "u-123"},
+})
+```
+
+どのフィールドが必要かは生成物の `state.py` の `SysInputs` に出ています。参照されている
+ものだけが宣言されます（`sys.query` はチャットフロー専用、`sys.app_id` / `sys.user_id` は
+ワークフロー専用など、Dify 側で使えるものがモードによって違うため）。
+
+> **渡し忘れると `ValueError: missing required sys input(s): app_id` になります。**
+> Dify 本体ではこれらはアプリや会話から自動で埋まりますが、生成物は Dify から切り離された
+> 単体の LangGraph アプリなので、呼び出し側が渡すしかありません。`python -m <pkg>` は
+> `__main__.py` に例が入っているのでそのまま動きます。
+
+### Dify の環境変数（`env.*`）
+
+Dify 側で `environment_variables` を宣言しているワークフローは、生成物に `env.py` が
+出力されます。`secret` 以外は DSL の値をそのまま定数として持ちます。
+
+```python
+from workflow import env
+print(env.API_BASE)      # DSL の値がそのまま入っている
+```
+
+**`value_type: secret` の変数は定数になりません。** Dify は secret の値を DSL に平文で
+書き出すため、そのまま定数にすると資格情報をソースに埋め込んでコミットすることになります。
+生成物は代わりに**実行時に同名の環境変数から読みます**。
+
+```bash
+export SECRET_TOKEN=...            # DSL で宣言した名前と同じ名前で渡す
+python -m workflow
+```
+
+`.env` に書いても読まれます（パッケージのあるディレクトリから上に辿ります）。
+export した環境変数の方が `.env` より優先されます。
+
+必要な環境変数の一覧は実行前に確認できます。
+
+```python
+from workflow import env
+print(env.REQUIRED_ENV_VARS)       # 例: ('SECRET_TOKEN',)
+```
+
+> **未設定のまま読むと、変数名を挙げて失敗します。**
+> `RuntimeError: environment variable 'SECRET_TOKEN' is required by this workflow
+> (declared as a secret in the Dify DSL) but is not set`。空文字を返して後続で
+> 原因不明のエラーになるより、ここで止める方を選んでいます。
+>
+> secret の名前が `PATH` や `HOME` などのシステム環境変数とぶつかると、資格情報ではなく
+> マシン側の値が黙って読まれます。変換時に警告が出るので、その場合は Dify 側で名前を
+> 変えてください。
 
 ---
 
@@ -229,21 +292,31 @@ dify2langgraph workflow.yml --llm-provider anthropic --llm-model claude-sonnet-4
 │   ├── __init__.py
 │   └── <node>.py
 ├── llm.py                # LLM 設定ヘルパー
+├── env.py                # Dify の environment_variables（宣言がある場合のみ）
 └── retriever.py          # 知識取得の Retriever（Dify Retrieval API）
 ```
 
 - ノード本体の多くは `# TODO` のプレースホルダです。ワークフローの構造（状態・エッジ・分岐）は
   正しく生成されるので、各ノードの中身を埋めていくことで完成させられます。
 - `end` ノードと `knowledge-retrieval` ノードは、そのまま動く実装が生成されます。
+- `env.py` は Dify 側で環境変数を宣言しているワークフローだけに出力されます
+  （[Dify の環境変数（`env.*`）](#dify-の環境変数env)を参照）。
+- `# TODO` のノード本体が `env.*` を参照している場合、コメントに
+  「`from .. import env` を追加せよ」と書かれています。未使用の import を生成物に
+  残さないため、本体を埋めるまで import は出力していません。
 
 ---
 
 ## 8. Windows で使う場合
 
-> **まず [9. Docker で使う](#9-docker-で使う) を検討してください。** この章で説明する
-> 3 つの落とし穴（Python 3.13 の用意・コンソールの文字コード・シェルごとの環境変数の
-> 書き方）は、Docker で実行すればいずれも発生しません。この章は Docker を使わず
-> Windows に直接インストールする場合の手順です。
+> **Windows ではこの章の手順を第一候補にしてください。** PowerShell と Git Bash の
+> 両方で Windows 実機検証済みです（Windows 11 / PowerShell 5.1 / en-US / コードページ 437。
+> 生成物が macOS・Linux コンテナとバイト一致することまで確認しています）。
+> [9. Docker で使う](#9-docker-で使う) も使えますが、**Docker Desktop for Windows は
+> 未検証**です（理由は 9 章冒頭）。
+>
+> この章で挙げる落とし穴のうち Python 3.13 の用意は、uv を入れれば uv 自身が CPython を
+> 落としてくるので実質的に問題になりません。
 
 Windows でも同じ CLI がそのまま動きますが、次の 2 点だけ macOS / Linux と異なります。
 
@@ -300,13 +373,49 @@ PowerShell / コマンドプロンプトでは使えません。以下に読み�
 | `PYTHONPATH=src python -m ...` | `$env:PYTHONPATH = "src"` の後に `python -m ...` | `set PYTHONPATH=src` の後に `python -m ...` |
 
 **Git Bash を使う場合は、左端の bash 列がそのまま使えます。** `export VAR=値` も
-`VAR=値 command` も期待どおり動きます。ただし Docker と組み合わせるときだけは
-パス変換に注意が必要です（[9.2](#92-変換する)参照）。
+`VAR=値 command` も期待どおり動きます（実機で確認済み）。パスの扱いと Docker と
+併用する際の注意は [8.3](#83-git-bash-の場合) を参照してください。
 
 環境変数を使わず、実行ディレクトリに `.env` ファイルを置く方法（[5 章](#5-rag知識取得の設定)参照）
 が最も移植性が高くおすすめです。
 
-### 8.3 補足
+### 8.3 Git Bash の場合
+
+環境変数は bash と同じ書き方が使えます（[8.2](#82-環境変数の指定方法) の左端の列）。
+パスについては、**Git Bash 形式（`/c/Users/you/wf.yml`）と Windows 形式
+（`C:/Users/you/wf.yml`）のどちらでも渡せます**。Git Bash は MSYS2 上で動いており、
+ネイティブのプログラムを起動する際に前者を後者へ自動変換するためです。
+
+```bash
+dify2langgraph /c/Users/you/workflow.yml -o out --skip-implement   # どちらでも可
+dify2langgraph C:/Users/you/workflow.yml -o out --skip-implement
+```
+
+> **エクスプローラからコピーしたパスは引用符で囲んでください。** `C:\Users\you\wf.yml`
+> のようなバックスラッシュ区切りは、囲まないと bash がバックスラッシュを取り除いて
+> しまい（`C:Usersyouwf.yml`）CLI に届きません。囲めばそのまま使えます。
+>
+> ```bash
+> dify2langgraph "C:\Users\you\workflow.yml" -o out --skip-implement
+> ```
+
+> **Docker と組み合わせるときだけ、この自動変換が邪魔になります。** 変換は
+> `target=/work` のようなコンテナ内パスにも及ぶためです。[9.2](#92-変換する) の
+> `MSYS_NO_PATHCONV=1` と `$(pwd -W)` を使ってください。
+
+> **ネットワークドライブや共有フォルダ上に仮想環境を作らないでください。**
+> [2 章 B](#b-そのままソースとして使う) の手順でリポジトリをそこに置いて `uv sync`
+> すると、`The parameter is incorrect. (os error 87)` のような失敗をします
+> （Parallels の共有フォルダで実測）。リポジトリをローカルディスクに複製してから
+> 作業してください。
+>
+> `uv` には仮想環境の場所だけを移す `UV_PROJECT_ENVIRONMENT` がありますが、uv 自身の
+> ドキュメントが「複数プロジェクトで共有すると上書きし合うので CI やコンテナ向け」と
+> していること、およびこの構成を検証していないことから、ここでは推奨しません。
+> [2 章 A](#a-パッケージとしてインストール推奨) の `pip install .` は共有フォルダ上に
+> 仮想環境を作らないため、この問題を受けません。
+
+### 8.4 補足
 
 - パス区切りは `\` / `/` どちらでも動作します（内部で `pathlib` を使用）。
 - 生成物の改行コードは OS に関わらず常に **LF** です。Windows でネイティブ実行しても
@@ -322,7 +431,16 @@ PowerShell / コマンドプロンプトでは使えません。以下に読み�
 
 **変換ツールを実行環境ごと**コンテナで配布する方法です。Python 3.13 の用意も、
 コンソールの文字コード設定（`PYTHONUTF8`）も、シェルごとの環境変数の書き方も不要になります。
-**Windows ではこちらを第一候補にしてください。**
+
+> **検証状況: macOS / Linux は検証済み、Windows は未検証です。**
+> macOS・Linux（Rancher Desktop / Docker Desktop）では、コンテナの出力がネイティブ実行と
+> バイト一致することまで確認しています。一方 **Docker Desktop for Windows は検証できていません**
+> — バインドマウントの挙動、ドライブレターを含む `--mount` のソース指定、ファイル所有者の
+> 3 点が未確認です。検証環境（Parallels Desktop Standard）ではネスト仮想化が有効化できず
+> WSL2 が動かないためで、見込みも立っていません。
+> **Windows では [8 章](#8-windows-で使う場合)のネイティブ実行を使ってください**（両シェルで検証済み）。
+> なお Docker Desktop は従業員数・売上が一定規模を超える企業では有償ライセンスが必要なので、
+> 顧客環境では社内申請の対象になり得ます。
 
 > **対象は変換ツールだけです。** 生成された LangGraph パッケージには Dockerfile も
 > `requirements.txt` も出力されません。生成物はお手元の既存 Python 環境で実行する前提です

@@ -2,6 +2,35 @@
 
 Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); terms: [CONTEXT.md](./CONTEXT.md).
 
+## 要 Windows 実機（o02c さんの手元環境が必要）
+
+エージェント側では実行できないタスク。Parallels の Windows VM が使えるときに。
+
+- [ ] **検証スクリプト 2 本の再実行。** 直近の実測（PowerShell 15 passed / Git Bash
+  17 passed）はレビュー修正より前のもので、その後に**検査ロジック自体が変わっている**:
+  B3 は常に PASS だったところに FAIL 分岐を追加、C1 は PASS / FAIL の判定を組み替え、
+  M4 は新規追加でまだ一度も Windows で走っていない。数字が古いまま「検証済み」にすると、
+  このリポジトリで繰り返し潰してきた偽 PASS と同じ状態になる。
+
+  ```powershell
+  # 1. macOS 側で基準 digest を取る
+  #    make verify-digest
+  # 2. VM に展開（Downloads 経由）
+  #    git archive --format=zip -o ~/Downloads/d2l.zip HEAD
+  # 3. PowerShell
+  .\scripts\verify-windows.ps1 -ExpectedDigest <上の digest>
+  ```
+  ```bash
+  # 4. Git Bash（同じ digest を渡す）
+  scripts/verify-gitbash.sh --expected-digest <上の digest>
+  ```
+
+  > `sys.*` / `env.*` の実装で**生成物が変わったため digest も変わっている**。古い
+  > `3ca50a8c...` ではなく、その時点の `make verify-digest` の値を使うこと。
+
+  LLM 経路まで見る場合は `-WithLlm` / `--with-llm` を追加（実際に課金される）。
+  Docker は対象外（下記「Windows での Docker 検証は「やらない」と決めた」を参照）。
+
 ## Cleanup (整理 PR #4 — 完了)
 
 - [x] `src/dify2langgraph/` を正典化し、旧フラット構成を削除
@@ -32,7 +61,11 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   - [x] 生成コードが ruff の既定設定（line-length 88）で lint クリーンであることを全フィクスチャで固定
         （`TestGeneratedCodeIsLintClean`。生成物は `pyproject.toml` を持たないため既定設定で lint される）
   - [x] AWS リージョン / プロファイル解決、SSO エラーメッセージ、`.env` 探索
-  - [ ] ハンドラ単位、循環参照・孤立ノード等のエッジケース
+  - [~] 循環参照・孤立ノード・自己ループを追加。`get_dependency_order` が循環時に
+    静かにノードを落としていた（3 ノード中 1 つしか返らない）ので、循環を検出して
+    関与ノードを名指しする `ValueError` にした。ハンドラは `if-else` だけ
+    `get_handler` で名指しされていなかったので補った
+  - [ ] 残り: ハンドラごとの `output_fields` / `stub_output` の網羅
 
 ## Packaging / 移植性（ADR-0008）
 
@@ -48,7 +81,7 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [x] 未使用依存の削除 — `psycopg2-binary`（ADR-0006 の残骸）、`langchain` メタパッケージ
 - [~] **Windows ホストでの実機検証** — `scripts/verify-windows.ps1` を用意（PowerShell 5.1 互換）。
   macOS からは検証できない主張だけを対象にしている: コンソールのコードページ、PowerShell の
-  環境変数構文、パス区切り、`--mount` のドライブレター、Docker Desktop for Windows のマウント所有者。
+  環境変数構文、パス区切り。Docker は対象外（下記の判断を参照）。
   出力のバイト一致は `make verify-digest`（macOS/Linux）と `-ExpectedDigest`（Windows）で突き合わせる
   - [x] macOS 側の基準値と Linux コンテナ側の検証は完了（両者一致）
   - [x] Windows 実機でのネイティブ CLI 検証（B/C/D 群）— **完了**。
@@ -64,15 +97,34 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
     最終 GraphState を JSON に落とし、全ノード通過・End の値転送・分岐が 1 つに解決・
     資格情報なしの knowledge-retrieval が `[]` を確認。PowerShell と Git Bash の
     両経路で通過
-  - [ ] **Git Bash 経路の検証** — 顧客環境には Git Bash があるため、PowerShell と並ぶ
-    実使用経路。`MSYS_NO_PATHCONV=1` と `$(pwd -W)` を使う形を USAGE.md 9.2 に書いたが
-    **実機未検証**。MSYS2 のパス変換は `target=/work` にも及ぶので、ここを外すと
-    マウント先が化ける。検証は `verify-windows.ps1` の bash 版を起こすか、
-    B/C 群をシェル非依存な形に切り出して両方から呼ぶ形が考えられる
-  - [ ] Windows 実機での Docker 検証（E 群）— **現状の手元環境では不可**。Docker Desktop for
-    Windows は WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は
-    Parallels Desktop の Pro / Business 版専用で、Standard 版では有効化できない。
-    実施するには Parallels のエディション変更か、別の Windows 実機が要る
+  - [~] **Git Bash 経路の検証** — `scripts/verify-gitbash.sh`（bash 3.2 互換、
+    shellcheck クリーン）で Windows 11 ARM64 / MINGW64 / コードページ 437 上で
+    17 passed / 0 failed。実質的な判定は PowerShell 版と同じ Python ヘルパを共有する
+    - [ ] **Windows での再実行が未了** — 上の「要 Windows 実機」節を参照。この 17 passed は
+      レビュー修正より前の実測で、その後に検査ロジック自体が変わっている
+    - MSYS の引数パス変換により `/c/...` と `C:/...` の両形式が CLI に届く（M1 / M3）
+    - `pwd -W` が Windows 形式を返す（M2）— USAGE 9.2 の指示の裏付け
+    - 生成物が macOS・Linux コンテナとバイト一致（B5）
+    - `.gitattributes` に `*.sh text eol=lf` を追加。CRLF の .sh は shebang が
+      `/usr/bin/env bash\r` になり Git Bash が起動すら拒否する
+    - 共有フォルダ上には venv を作れない（`os error 87`）。Windows では無条件に
+      ローカルへ複製するようにし、USAGE 8.3 にも注意として記載した
+    - Docker 併用（`MSYS_NO_PATHCONV=1` + `pwd -W` をバインドマウントのソースに使う形）は
+      **検証対象から外した** — 下記の判断のとおり Windows での Docker 検証自体をやめたため。
+      元の懸念の中心はここだったが、`pwd -W` が Windows 形式を返すこと（M2）までは
+      確認できている。`verify-gitbash.sh` 側の E 群も、一度も実行されていないため削除した
+  - [x] **Windows での Docker 検証は「やらない」と決めた** — Docker Desktop for Windows は
+    WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は Parallels Desktop の
+    Pro / Business 版専用で、Standard 版では有効化できない。実施には Parallels の
+    エディション変更か別の Windows 実機が必要。
+    一度も実行されないまま残っていた E 群は削除した。このスクリプトでは「実行されて
+    いない検証コードが PASS を返す」不具合を何度も踏んでいるため、動かしたことのない
+    検査を置いておくと検証結果全体の信頼性が落ちる。coverage に見えるだけの空白よりは
+    無い方がよい。
+    コンテナ経路自体は macOS / Linux で検証済み（生成物がネイティブ実行とバイト一致する
+    ことまで確認）。未検証なのは Docker Desktop **for Windows** のバインドマウント挙動・
+    ドライブレターの `--mount`・ファイル所有者の 3 点。Windows の顧客には
+    ネイティブ経路（USAGE 8 章、PowerShell と Git Bash の両方で検証済み）を案内する
 - [x] **変換時のプロバイダに google が無い** — `llm/google.py` を追加して解消。
   あわせて `--llm-model` の既定をプロバイダ追随にした（`gpt-4o-mini` 固定だったため
   `--llm-provider google` は 404、`anthropic` も同様に失敗していた）
@@ -107,7 +159,21 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 ## Deferred（要調査 / 後続）
 
 - [ ] iteration（ループ）— ループ全体が 1 ノードで内部にサブグラフを持つ表現。実 DSL 調査後に Handler 形状を決定（ADR-0005 参照）
-- [ ] `sys.*` / `env.*` の実装（住所は ADR-0004 で予約済み、実装は後追い）
+- [x] **`sys.*` の実装** — 参照されているフィールドだけを `SysInputs` として宣言し、
+  `GraphState` に `sys` を追加。呼び出し側が invoke 時に渡す（ADR-0009 と同じ扱い）。
+  selector 形式とテンプレート形式の両方が解決される。sys の構成はモード依存
+  （`sys.query` は chatflow のみ、workflow は `sys.app_id` / `sys.user_id`）なので、
+  固定の一覧は持たない
+- [x] **`env.*` の実装** — `env.py` を生成し、`env.NAME` で参照する（ADR-0004）。
+  secret は定数にせず、実行時に同名の環境変数から読む（PEP 562 の module `__getattr__`）。
+  未設定なら変数名を挙げて `RuntimeError`。DSL は secret の値を平文でエクスポートするため、
+  定数にすると顧客がコミットするソースに資格情報が入る。参照解決も
+  `state["env"][...]` から `env.NAME` に変えた（前者はコメントと NODE_CONFIG にのみ
+  現れていたが、そこは LLM 本体生成の入力そのもの）
+- [x] chatflow（`mode: advanced-chat`）の形を fixture 化 — `chatflow_sys_query.yml`。
+  `answer` 終端・`variables: []` の Start・非数値ノード ID・`{{#sys.query#}}` を含む。
+  これで生成コード品質のバグ 2 件（`END` が未使用 import になる／`__init__.py` の
+  import と `__all__` が未整列）も表面化して修正した
 - [ ] `conversation.*`（chatflow 専用、対象外）
 - [ ] 埋め込みモデル自動解決 — API 経由で不要化の見込みだが、別バックエンド採用時に再検討
 - [~] Retriever に検索設定を転送（ADR-0006、実 Dify 1.16.1 で検証）

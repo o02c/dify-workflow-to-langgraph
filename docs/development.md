@@ -103,7 +103,7 @@ native process a UNC working directory, so `uv.exe` would otherwise run against
 
 The checks are grouped: **B** the converter runs, **C** console code page,
 **D** PowerShell environment variables, **F** generated workflows actually
-execute, **G** real LLM calls (opt-in via `-WithLlm`), and **E** Docker last. F is the one that matters to a customer -- it runs a generated
+execute, and **G** real LLM calls (opt-in via `-WithLlm`). F is the one that matters to a customer -- it runs a generated
 package through `scripts/run_generated.py`, which prints the final GraphState as
 ASCII-only JSON, and asserts the graph really executed: every node visited, the
 End Node forwarding an upstream value (ADR-0004), a Branching Node resolving to
@@ -143,7 +143,50 @@ The two pairs are separate because the choices are independent -- a cheap model
 can write the node bodies while a different one runs them. Both surfaces support
 the same four providers (openai, anthropic, bedrock, google).
 
-The script can be dry-run on macOS/Linux with PowerShell installed
+## Git Bash
+
+`scripts/verify-gitbash.sh` is the companion for the other shell that exists in
+client environments. Git Bash is not PowerShell with different syntax: it runs on
+the MSYS2 runtime, which **rewrites arguments that look like Unix paths** before
+handing them to a native Windows process. That is why USAGE.md 9.2 tells Docker
+users to set `MSYS_NO_PATHCONV=1` and pass `$(pwd -W)` — without them, MSYS
+rewrites `target=/work` itself and the bind mount lands somewhere else.
+
+```bash
+# On macOS/Linux, where make exists:
+scripts/verify-gitbash.sh --expected-digest "$(make -s verify-digest)"
+```
+
+```bash
+# On the Windows host. Git for Windows ships no make, so paste the digest --
+# command substitution would silently yield "" and degrade the digest check to
+# SKIP. Add --with-llm only when you mean to spend money on a real model.
+scripts/verify-gitbash.sh --expected-digest 3ca50a8c...
+```
+
+It shares the substantive work with the PowerShell script — both call
+`output_digest.py` and `run_generated.py` — so the two shells cannot disagree
+about the generated output. Their **check ids are per-script**, though: `D2` means
+different things in each, and each covers ground the other does not (the bash
+script has the `M` group; the PowerShell one has the branching and
+backslash-separator checks). Read the claim text, not the id. The `M` group holds the MSYS-specific checks and
+reports SKIP elsewhere, which is how the script gets exercised on macOS before
+going to a Windows host. Lint it with `shellcheck`; the two remaining SC2016
+findings are intentional (`$Format:%H$` must stay literal, and the PATH line is
+instructional text).
+
+**`.gitattributes` pins `*.sh` to LF.** This is not cosmetic. With Git for
+Windows' default `core.autocrlf=true`, a cloned shell script gets CRLF, the
+shebang becomes `/usr/bin/env bash\r`, and Git Bash refuses to start it:
+
+```
+env: bash\r: No such file or directory
+```
+
+## Dry-running the verification scripts
+
+Both scripts can be dry-run on macOS/Linux — `verify-gitbash.sh` runs natively
+(its `M` group reports SKIP), and the PowerShell one needs pwsh installed
 (`brew install powershell`), which exercises its whole control flow before it is
 handed to a Windows host:
 
@@ -175,11 +218,21 @@ rediscovered:
   one helper that drops to `Continue` for the duration of the call and reports
   via the exit code.
 
-The Docker group is skipped when no daemon is reachable. Worth knowing before
-planning that part: Docker Desktop for Windows requires WSL2, i.e. nested
-virtualization, and in Parallels Desktop nested virtualization is a Pro/Business
-feature -- on the Standard edition it cannot be enabled at all. The native checks
-need no Docker and cover the failure modes that prompted this work.
+**Docker on Windows is out of scope for this script, deliberately.** It once
+carried a Docker group that never executed even once: Docker Desktop for Windows
+requires WSL2, i.e. nested virtualization, and in Parallels Desktop nested
+virtualization is a Pro/Business feature that cannot be enabled at all on the
+Standard edition. A verification script earns its keep by being trustworthy, and
+several checks in this very script turned out to report PASS without asserting
+anything until they were actually run -- so a group that had never run was a
+liability, not coverage. It was removed rather than left to look like coverage.
+
+The container path itself is still verified, on macOS and Linux (Rancher Desktop
+or Docker Desktop), including that container output is byte-identical to a native
+run. What is unverified is specifically Docker Desktop **for Windows**: its
+bind-mount semantics, drive-letter `--mount` sources, and file ownership. A
+Windows customer should use the native path (USAGE.md section 8), which is fully
+verified in both PowerShell and Git Bash and needs no Docker at all.
 
 Generated files are written with `newline="\n"` so they are LF on every platform.
 Left to Python's default, a native Windows run would emit CRLF while the container

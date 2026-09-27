@@ -33,9 +33,11 @@ class TestOutputFields:
     """Each handler reports the Node Output fields for its type."""
 
     def test_llm(self):
+        """Dify's LLM node outputs reasoning_content too, so a selector can read it."""
         assert get_handler("llm").output_fields(_node("llm")) == {
             "text": "str",
-            "usage": "dict[str, int]",
+            "reasoning_content": "str",
+            "usage": "dict[str, Any]",
         }
 
     def test_code(self):
@@ -168,6 +170,8 @@ class TestEndDeterministicBody:
         assert get_handler("end").emits_stub_body is False
         # Start is deterministic too (ADR-0009): it surfaces the caller's inputs.
         assert get_handler("start").emits_stub_body is False
+        # if-else was the only registered handler never named here.
+        assert get_handler("if-else").node_type == "if-else"
         assert get_handler("llm").emits_stub_body is True
 
 
