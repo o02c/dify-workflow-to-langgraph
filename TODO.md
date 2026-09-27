@@ -2,6 +2,35 @@
 
 Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); terms: [CONTEXT.md](./CONTEXT.md).
 
+## 要 Windows 実機（o02c さんの手元環境が必要）
+
+エージェント側では実行できないタスク。Parallels の Windows VM が使えるときに。
+
+- [ ] **検証スクリプト 2 本の再実行。** 直近の実測（PowerShell 15 passed / Git Bash
+  17 passed）はレビュー修正より前のもので、その後に**検査ロジック自体が変わっている**:
+  B3 は常に PASS だったところに FAIL 分岐を追加、C1 は PASS / FAIL の判定を組み替え、
+  M4 は新規追加でまだ一度も Windows で走っていない。数字が古いまま「検証済み」にすると、
+  このリポジトリで繰り返し潰してきた偽 PASS と同じ状態になる。
+
+  ```powershell
+  # 1. macOS 側で基準 digest を取る
+  #    make verify-digest
+  # 2. VM に展開（Downloads 経由）
+  #    git archive --format=zip -o ~/Downloads/d2l.zip HEAD
+  # 3. PowerShell
+  .\scripts\verify-windows.ps1 -ExpectedDigest <上の digest>
+  ```
+  ```bash
+  # 4. Git Bash（同じ digest を渡す）
+  scripts/verify-gitbash.sh --expected-digest <上の digest>
+  ```
+
+  > `sys.*` / `env.*` の実装で**生成物が変わったため digest も変わっている**。古い
+  > `3ca50a8c...` ではなく、その時点の `make verify-digest` の値を使うこと。
+
+  LLM 経路まで見る場合は `-WithLlm` / `--with-llm` を追加（実際に課金される）。
+  Docker は対象外（下記「Windows での Docker 検証は「やらない」と決めた」を参照）。
+
 ## Cleanup (整理 PR #4 — 完了)
 
 - [x] `src/dify2langgraph/` を正典化し、旧フラット構成を削除
@@ -64,11 +93,22 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
     F1/F2/F3 を追加済み。グラフが実際に実行されたか（全ノード通過、End の値転送、
     分岐が 1 つに解決、資格情報なしの knowledge-retrieval が `[]`）を最終状態の
     JSON で確認する。macOS ではドライラン済み、Windows 実機はこれから
-  - [ ] **Git Bash 経路の検証** — 顧客環境には Git Bash があるため、PowerShell と並ぶ
-    実使用経路。`MSYS_NO_PATHCONV=1` と `$(pwd -W)` を使う形を USAGE.md 9.2 に書いたが
-    **実機未検証**。MSYS2 のパス変換は `target=/work` にも及ぶので、ここを外すと
-    マウント先が化ける。検証は `verify-windows.ps1` の bash 版を起こすか、
-    B/C 群をシェル非依存な形に切り出して両方から呼ぶ形が考えられる
+  - [~] **Git Bash 経路の検証** — `scripts/verify-gitbash.sh`（bash 3.2 互換、
+    shellcheck クリーン）で Windows 11 ARM64 / MINGW64 / コードページ 437 上で
+    17 passed / 0 failed。実質的な判定は PowerShell 版と同じ Python ヘルパを共有する
+    - [ ] **Windows での再実行が未了** — 上の「要 Windows 実機」節を参照。この 17 passed は
+      レビュー修正より前の実測で、その後に検査ロジック自体が変わっている
+    - MSYS の引数パス変換により `/c/...` と `C:/...` の両形式が CLI に届く（M1 / M3）
+    - `pwd -W` が Windows 形式を返す（M2）— USAGE 9.2 の指示の裏付け
+    - 生成物が macOS・Linux コンテナとバイト一致（B5）
+    - `.gitattributes` に `*.sh text eol=lf` を追加。CRLF の .sh は shebang が
+      `/usr/bin/env bash\r` になり Git Bash が起動すら拒否する
+    - 共有フォルダ上には venv を作れない（`os error 87`）。Windows では無条件に
+      ローカルへ複製するようにし、USAGE 8.3 にも注意として記載した
+    - Docker 併用（`MSYS_NO_PATHCONV=1` + `pwd -W` をバインドマウントのソースに使う形）は
+      **検証対象から外した** — 下記の判断のとおり Windows での Docker 検証自体をやめたため。
+      元の懸念の中心はここだったが、`pwd -W` が Windows 形式を返すこと（M2）までは
+      確認できている。`verify-gitbash.sh` 側の E 群も、一度も実行されていないため削除した
   - [x] **Windows での Docker 検証は「やらない」と決めた** — Docker Desktop for Windows は
     WSL2、つまりネスト仮想化を要求するが、`prlctl set --nested-virt` は Parallels Desktop の
     Pro / Business 版専用で、Standard 版では有効化できない。実施には Parallels の
