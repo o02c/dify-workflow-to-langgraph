@@ -683,6 +683,44 @@ class TestTerminalNodes:
         assert 'graph.add_edge("node_1731659778623", END)' not in graph
         assert 'graph.add_edge("node_1731659992069", END)' in graph
 
+    def test_a_loop_body_s_leaf_does_not_terminate_the_workflow(self, tmp_path):
+        """`loop_id` was not checked at all, only `iteration_id`.
+
+        A loop body is a sub-graph like an iteration's, so its last step has no
+        outgoing edge in the DSL's flat edge list and looked terminal -- wiring it to
+        END asserts the whole workflow ends when one round of the loop body does.
+        """
+
+        def bury_in_a_loop(dsl: dict) -> None:
+            for node in dsl["workflow"]["graph"]["nodes"]:
+                if node["data"].get("type") == "end":
+                    node["data"]["loop_id"] = "some-loop"
+                    node["data"]["isInLoop"] = True
+
+        fixture = _fixture_variant(tmp_path, "simple_workflow.yml", bury_in_a_loop)
+        translate(fixture, tmp_path / _PKG)
+
+        graph = (tmp_path / _PKG / "graph.py").read_text(encoding="utf-8")
+        assert "END" not in graph
+
+    def test_a_top_level_parentId_is_enough(self, tmp_path):
+        """Dify's own scope resolution prefers `parentId` over the legacy ids.
+
+        It sits at the top level of the DSL node, not under `data`, so the parser has
+        to keep it -- a check against `data["parentId"]` could never fire.
+        """
+
+        def give_it_a_parent(dsl: dict) -> None:
+            for node in dsl["workflow"]["graph"]["nodes"]:
+                if node["data"].get("type") == "end":
+                    node["parentId"] = "some-container"
+
+        fixture = _fixture_variant(tmp_path, "simple_workflow.yml", give_it_a_parent)
+        translate(fixture, tmp_path / _PKG)
+
+        graph = (tmp_path / _PKG / "graph.py").read_text(encoding="utf-8")
+        assert "END" not in graph
+
     def test_a_graph_with_no_terminal_does_not_import_END(self, tmp_path):
         """An unused import is a lint failure in the generated package."""
 

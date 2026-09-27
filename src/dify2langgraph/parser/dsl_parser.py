@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from dify2langgraph.env_vars import usable_variables
+from dify2langgraph.logging_config import get_logger
 from dify2langgraph.naming import sanitize_function_name
 
 # Pattern to match Dify variable references: {{#node_id.field#}} or {{#node_id.field.subfield#}}
@@ -93,6 +94,10 @@ class NodeInfo:
         type: Node type (e.g., "llm", "code", "if-else").
         title: Human-readable node title.
         data: Raw node data from YAML.
+        parent_id: The container node this one sits inside, if any. Lives at the
+            *top level* of the DSL node rather than under ``data`` -- it is React
+            Flow's parent field -- and is what Dify's own scope resolution prefers
+            over the legacy ``data.iteration_id`` / ``data.loop_id``.
         references: Variable references found in this node.
         dependencies: Set of node IDs this node depends on.
     """
@@ -101,6 +106,7 @@ class NodeInfo:
     type: str
     title: str
     data: dict[str, Any]
+    parent_id: str | None = None
     references: list[VariableReference] = field(default_factory=list)
     dependencies: set[str] = field(default_factory=set)
 
@@ -143,6 +149,59 @@ class WorkflowGraph:
     environment_variables: list[dict[str, Any]] = field(default_factory=list)
 
 
+# The newest DSL version this converter has actually been exercised against. Real
+# exports in tests/fixtures span 0.1.0 / 0.1.3 / 0.7.0, and one has no version at
+# all, so the field genuinely varies. Nothing is rejected on this basis -- a
+# customer's export has to convert -- but a silent misread of a moved shape is worse
+# than a line of warning.
+logger = get_logger(__name__)
+
+MAX_TESTED_DSL_VERSION = (0, 7, 0)
+
+
+def _version_tuple(version: str) -> tuple[int, ...] | None:
+    """`"0.7.0"` -> `(0, 7, 0)`, or None when it is not a numeric version.
+
+    Args:
+        version: The DSL's ``version`` string.
+
+    Returns:
+        A comparable tuple, or None if it cannot be read as one.
+    """
+    parts = version.strip().split(".")
+    if not all(part.isdigit() for part in parts) or not parts:
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def _warn_on_untested_dsl_version(version: Any) -> None:
+    """Log when the DSL declares a version this converter has not been tested on.
+
+    Args:
+        version: The value of the DSL's top-level ``version`` key, if any.
+    """
+    tested = ".".join(str(part) for part in MAX_TESTED_DSL_VERSION)
+    if not isinstance(version, str) or not version.strip():
+        logger.warning(
+            "This DSL declares no version. Assuming a layout compatible with "
+            "Dify %s or earlier; check the generated output if anything looks off.",
+            tested,
+        )
+        return
+    parsed = _version_tuple(version)
+    if parsed is None:
+        logger.warning("Unrecognised DSL version %r; proceeding anyway.", version)
+    elif parsed > MAX_TESTED_DSL_VERSION:
+        logger.warning(
+            "This DSL is version %s, newer than the newest version this converter "
+            "has been tested against (%s). Conversion will proceed, but a shape "
+            "Dify has since moved could be read wrongly -- check the generated "
+            "output.",
+            version,
+            tested,
+        )
+
+
 class DifyDSLParser:
     """Parser for Dify workflow DSL files."""
 
@@ -173,6 +232,8 @@ class DifyDSLParser:
         Returns:
             A WorkflowGraph instance.
         """
+        _warn_on_untested_dsl_version(dsl_data.get("version"))
+
         # Extract workflow graph from DSL
         workflow_data = dsl_data.get("workflow", dsl_data)
         graph_data = workflow_data.get("graph", {})
@@ -230,11 +291,13 @@ class DifyDSLParser:
         # Build dependencies from references
         dependencies = {ref.node_id for ref in references}
 
+        parent_id = node_data.get("parentId")
         return NodeInfo(
             id=node_id,
             type=node_type,
             title=node_title,
             data=data,
+            parent_id=str(parent_id) if parent_id else None,
             references=references,
             dependencies=dependencies,
         )
