@@ -181,13 +181,15 @@ class TestEndDeterministicBody:
         graph = DifyDSLParser().parse_file(FIXTURES_DIR / "simple_workflow.yml")
         node = graph.nodes["end_node"]
         stub = get_handler(node.type).stub_output(node, graph)
-        assert stub == {"result": 'state["llm_node"]["text"]'}
+        # `.get` rather than `[...]`: an upstream node on a branch that was not
+        # taken has no entry in state, and Dify resolves that selector to None.
+        assert stub == {"result": 'state.get("llm_node", {}).get("text")'}
 
     def test_end_forwards_numeric_id_via_canonical_key(self):
         graph = DifyDSLParser().parse_file(FIXTURES_DIR / "translation_workflow.yml")
         node = graph.nodes["1721119092752"]
         stub = get_handler(node.type).stub_output(node, graph)
-        assert stub == {"output": 'state["node_1721118907775"]["text"]'}
+        assert stub == {"output": 'state.get("node_1721118907775", {}).get("text")'}
 
     def test_end_without_outputs_defaults_to_none(self):
         graph = DifyDSLParser().parse_file(FIXTURES_DIR / "guardduty_handler.yml")
@@ -213,7 +215,7 @@ class TestKnowledgeRetrievalBody:
         stub = get_handler(node.type).stub_output(node, graph)
         assert stub == {
             "result": "get_retriever().retrieve("
-            'query=state["node_1722391426202"]["finding"], '
+            'query=state.get("node_1722391426202", {}).get("finding") or "", '
             "dataset_ids=['a6d5e1e3-28c6-417c-aad8-6f2e3bfc7fd1'])"
         }
 

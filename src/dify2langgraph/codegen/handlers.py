@@ -446,7 +446,8 @@ def resolve_selector(
         return None
 
     source = selector[0]
-    if source in graph.nodes:
+    from_node = source in graph.nodes
+    if from_node:
         key, _ = get_node_names(str(source), node_name_map)
     elif source == SYS_NAMESPACE:
         # ADR-0004: sys lives in state under its own reserved key.
@@ -467,9 +468,30 @@ def resolve_selector(
     else:
         return None
 
-    access = f"state[{json.dumps(key)}]"
-    for part in selector[1:]:
-        access += f"[{json.dumps(str(part))}]"
+    if not from_node:
+        # sys is supplied by the caller for every run, and a missing field is
+        # rejected by name in the prelude (sys_prelude), so index it directly.
+        access = f"state[{json.dumps(key)}]"
+        for part in selector[1:]:
+            access += f"[{json.dumps(str(part))}]"
+        return access
+
+    # A read of another node's output has to tolerate that node not having run.
+    # Branches are the ordinary case: when two branches converge on one End, the
+    # one that was not taken has no entry in state at all, so indexing it raised
+    # `KeyError: '<node>'` -- on the node key, not even the field. Dify resolves an
+    # unavailable selector to None, so mirror that.
+    #
+    # This is not a retreat from failing loudly: that rule is about inputs the
+    # *caller* must supply (workflow inputs, sys, secrets). A value that does not
+    # exist because its branch was skipped is not a missing input. And with output
+    # fields now derived from the DSL (effective_output_fields), a field a node
+    # declares is always present once the node runs -- so None means "that branch
+    # did not run".
+    parts = [str(part) for part in selector[1:]]
+    access = f"state.get({json.dumps(key)}, {{}}).get({json.dumps(parts[0])})"
+    for part in parts[1:]:
+        access = f"({access} or {{}}).get({json.dumps(part)})"
     return access
 
 
@@ -791,7 +813,9 @@ class KnowledgeRetrievalHandler(NodeHandler):
         dataset_ids = node.data.get("dataset_ids") or []
         resolved = resolve_selector(selector, graph, node_name_map)
         if resolved:
-            query = resolved
+            # `or ""`: a node-sourced read yields None when that node did not run
+            # (see resolve_selector), and the Retriever port takes a string.
+            query = f'{resolved} or ""'
         else:
             query = '""'
         call = f"get_retriever().retrieve(query={query}, dataset_ids={dataset_ids!r}"

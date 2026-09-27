@@ -698,3 +698,152 @@ class TestTerminalNodes:
         assert "END" not in graph
         proc = _run_python(["-m", "ruff", "check", str(tmp_path / _PKG)], tmp_path)
         assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+class TestOutputFieldsComeFromTheDsl:
+    """A node's outputs are whatever the DSL says, not a table we maintain.
+
+    Every case here crashed the generated package before: conversion succeeded and
+    running it raised KeyError, which is the worst shape for a customer.
+    """
+
+    _ERR_FIXTURE = "error_strategy_workflow.yml"
+    _INITIAL = {"node_1790523813130": {"url": "https://example.com"}}
+
+    def test_a_code_node_declares_the_outputs_the_dsl_declares(self, tmp_path):
+        """`outputs: {body_head: {type: string}}` -- not `result`/`stdout`/`stderr`.
+
+        The invented set meant a downstream read of the declared name raised
+        `KeyError: 'body_head'`.
+        """
+        state = _generate_and_run(tmp_path, self._ERR_FIXTURE, self._INITIAL)
+
+        assert state["node_1790523864798"] == {"body_head": "placeholder"}
+
+    def test_an_unhandled_node_type_declares_what_is_read_from_it(self, tmp_path):
+        """`http-request` has no handler, yet the DSL reads four fields from it.
+
+        The fallback declared only `output`, so every one of those reads crashed.
+        The types come from the `value_type` the DSL puts beside each selector.
+        """
+        translate(FIXTURES_DIR / self._ERR_FIXTURE, tmp_path / _PKG)
+
+        state_source = (tmp_path / _PKG / "state.py").read_text(encoding="utf-8")
+        http_block = state_source.split("class Node1790523828855Output")[1].split("class ")[0]
+
+        assert "body: str" in http_block
+        assert "status_code: float" in http_block
+        # Dify injects these two on the error path, and the DSL reads them.
+        assert "error_message: str" in http_block
+        assert "error_type: str" in http_block
+
+    def test_a_declared_field_is_readable_at_run_time(self, tmp_path):
+        """Declaring it in state.py is not enough -- the body has to write it too."""
+        state = _generate_and_run(tmp_path, self._ERR_FIXTURE, self._INITIAL)
+
+        http = state["node_1790523828855"]
+        assert http["body"] == "placeholder"
+        assert http["status_code"] == 0.0
+        assert http["error_message"] == "placeholder"
+
+    def test_a_selector_deeper_than_one_field_resolves(self, tmp_path):
+        """`[node, "headers", "x-request-id"]` needs a nested placeholder.
+
+        A flat one satisfies the first step and raises on the second.
+        """
+
+        def read_a_header(dsl: dict) -> None:
+            for node in dsl["workflow"]["graph"]["nodes"]:
+                if node["data"].get("type") == "end":
+                    node["data"]["outputs"].append({
+                        "value_selector": ["1790523828855", "headers", "x-request-id"],
+                        "value_type": "string",
+                        "variable": "request_id",
+                    })
+                    break
+
+        fixture = _fixture_variant(tmp_path, self._ERR_FIXTURE, read_a_header)
+        state = _generate_and_run(tmp_path, fixture, self._INITIAL)
+
+        assert state["node_1790524186925"]["request_id"] == "placeholder"
+
+    def test_a_node_type_nobody_has_ever_seen_still_runs(self, tmp_path):
+        """The safety net must not depend on knowing Dify's node catalogue.
+
+        Dify adds node types faster than any table can track, so the test uses a
+        type that exists nowhere: the End still reads `body_head` from it, and that
+        reference alone has to be enough to declare the field.
+        """
+
+        def invent_a_type(dsl: dict) -> None:
+            for node in dsl["workflow"]["graph"]["nodes"]:
+                if node["data"].get("type") == "code":
+                    node["data"]["type"] = "some-future-node"
+                    # Not even a declaration to fall back on.
+                    node["data"].pop("outputs", None)
+                    return
+
+        fixture = _fixture_variant(tmp_path, self._ERR_FIXTURE, invent_a_type)
+        state = _generate_and_run(tmp_path, fixture, self._INITIAL)
+
+        # Declared on the unknown node purely because the End reads it, and typed
+        # `str` from that selector's own value_type.
+        assert state["node_1790523864798"]["body_head"] == "placeholder"
+        assert state["node_1790524186925"]["body_head"] == "placeholder"
+
+
+class TestBranchThatDidNotRun:
+    """Two branches converging on one End: the untaken one resolves to None.
+
+    Dify resolves an unavailable selector to None. Indexing it instead raised
+    `KeyError: '<node>'` -- on the node key, before even reaching the field.
+    """
+
+    def test_converging_end_yields_none_for_the_untaken_branch(self, tmp_path):
+        def converge(dsl: dict) -> None:
+            graph = dsl["workflow"]["graph"]
+            ifelse = next(
+                n for n in graph["nodes"] if n["data"].get("type") == "if-else"
+            )
+            ends = [n for n in graph["nodes"] if n["data"].get("type") == "end"]
+            keep, drop = ends[0], ends[1]
+            for branch in ("br_true", "br_false"):
+                graph["nodes"].append({
+                    "id": branch,
+                    "data": {
+                        "type": "template-transform",
+                        "title": branch,
+                        "template": "x",
+                        "variables": [],
+                    },
+                })
+            graph["edges"] = [
+                e
+                for e in graph["edges"]
+                if e["source"] != ifelse["id"] and e["target"] != drop["id"]
+            ]
+            graph["edges"] += [
+                {"source": ifelse["id"], "target": "br_true",
+                 "sourceHandle": "true", "targetHandle": "target"},
+                {"source": ifelse["id"], "target": "br_false",
+                 "sourceHandle": "false", "targetHandle": "target"},
+                {"source": "br_true", "target": keep["id"],
+                 "sourceHandle": "source", "targetHandle": "target"},
+                {"source": "br_false", "target": keep["id"],
+                 "sourceHandle": "source", "targetHandle": "target"},
+            ]
+            graph["nodes"].remove(drop)
+            keep["data"]["outputs"] = [
+                {"variable": "taken", "value_selector": ["br_true", "output"],
+                 "value_type": "string"},
+                {"variable": "skipped", "value_selector": ["br_false", "output"],
+                 "value_type": "string"},
+            ]
+
+        fixture = _fixture_variant(tmp_path, "ifelse_workflow.yml", converge)
+        state = _generate_and_run(tmp_path, fixture, {"start_node": {"query": "x"}})
+
+        # The stub resolves if-else to its first branch key, so br_true runs.
+        assert state["end_true"]["taken"] == "placeholder"
+        assert state["end_true"]["skipped"] is None
+        assert "br_false" not in state
