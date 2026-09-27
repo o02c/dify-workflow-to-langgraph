@@ -24,8 +24,11 @@ class TestRegistryLookup:
         assert get_handler("question-classifier").node_type == "question-classifier"
 
     def test_unknown_type_falls_back_to_generic_stub(self):
-        handler = get_handler("http-request")  # not implemented in v1
-        assert handler.output_fields(_node("http-request")) == {"output": "Any"}
+        handler = get_handler("some-future-node")
+        # A type that exists nowhere, so the test cannot go stale as handlers are
+        # added. Downstream reads of a real unknown type are covered by the
+        # DSL-reference safety net (see test_generated).
+        assert handler.output_fields(_node("some-future-node")) == {"output": "Any"}
         assert handler.is_branching is False
 
 
@@ -37,6 +40,7 @@ class TestOutputFields:
         assert get_handler("llm").output_fields(_node("llm")) == {
             "text": "str",
             "reasoning_content": "str",
+            "finish_reason": "str",
             "usage": "dict[str, Any]",
         }
 
@@ -104,7 +108,10 @@ class TestOutputFields:
         ) == {"output": "str"}
 
     def test_answer(self):
-        assert get_handler("answer").output_fields(_node("answer")) == {"answer": "str"}
+        assert get_handler("answer").output_fields(_node("answer")) == {
+            "answer": "str",
+            "files": "list[Any]",
+        }
 
     def test_agent(self):
         assert get_handler("agent").output_fields(_node("agent")) == {
@@ -118,10 +125,74 @@ class TestOutputFields:
         ) == {"result": "list[dict[str, Any]]"}
 
     def test_tool(self):
+        """Dify's fixed three. Plugin-declared extras are not in the DSL."""
         assert get_handler("tool").output_fields(_node("tool")) == {
             "text": "str",
-            "files": "list[dict[str, Any]]",
+            "files": "list[Any]",
+            "json": "list[dict[str, Any]]",
         }
+
+    def test_http_request(self):
+        """It had no handler at all, so `body` was undeclared and unreadable."""
+        assert get_handler("http-request").output_fields(_node("http-request")) == {
+            "body": "str",
+            "status_code": "float",
+            "headers": "dict[str, Any]",
+            "files": "list[Any]",
+        }
+
+    def test_parameter_extractor_reads_its_declared_parameters(self):
+        """Like `code`, the DSL names them -- plus Dify's three own fields."""
+        node = _node("parameter-extractor", {
+            "type": "parameter-extractor",
+            "parameters": [
+                {"name": "city", "type": "string"},
+                {"name": "days", "type": "number"},
+                {"name": "ok", "type": "bool"},  # Dify's legacy spelling
+            ],
+        })
+
+        assert get_handler("parameter-extractor").output_fields(node) == {
+            "city": "str",
+            "days": "float",
+            "ok": "bool",
+            "__is_success": "int",
+            "__reason": "str",
+            "__usage": "dict[str, Any]",
+        }
+
+    def test_list_operator_types_come_from_the_node(self):
+        node = _node("list-operator", {
+            "type": "list-operator",
+            "var_type": "array[object]",
+            "item_var_type": "object",
+        })
+
+        assert get_handler("list-operator").output_fields(node) == {
+            "result": "list[dict[str, Any]]",
+            "first_record": "dict[str, Any]",
+            "last_record": "dict[str, Any]",
+        }
+
+    def test_document_extractor_follows_its_input_shape(self):
+        single = _node("document-extractor", {"type": "document-extractor"})
+        many = _node("document-extractor", {
+            "type": "document-extractor", "is_array_file": True,
+        })
+
+        assert get_handler("document-extractor").output_fields(single) == {"text": "str"}
+        assert get_handler("document-extractor").output_fields(many) == {
+            "text": "list[str]",
+        }
+
+    def test_nodes_with_no_readable_output_declare_none(self):
+        """Dify exposes nothing from these, so a bare `output` field would be a lie.
+
+        `assigner` writes to conversation variables; the iteration/loop markers are
+        no-op anchors.
+        """
+        for node_type in ("assigner", "iteration-start", "loop-start", "loop-end"):
+            assert get_handler(node_type).output_fields(_node(node_type)) == {}, node_type
 
     def test_variable_aggregator(self):
         assert get_handler("variable-aggregator").output_fields(
@@ -140,7 +211,10 @@ class TestBranching:
     def test_if_else_is_branching(self):
         node = _node("if-else")
         assert is_branching(node) is True
-        assert decision_field(node) == "selected_branch"
+        # Dify's own name for the output. `selected_branch` was invented here, so
+        # anyone implementing the body would compute the right value under a name
+        # nothing else uses.
+        assert decision_field(node) == "selected_case_id"
 
     def test_plain_node_is_not_branching(self):
         node = _node("llm")
@@ -171,7 +245,7 @@ class TestStubOutput:
         node = graph.nodes["ifelse_node"]
         stub = get_handler(node.type).stub_output(node, graph)
         # First outgoing branch of the if-else is the 'true' handle.
-        assert stub["selected_branch"] == "'true'"
+        assert stub["selected_case_id"] == "'true'"
 
 
 class TestEndDeterministicBody:

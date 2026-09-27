@@ -167,8 +167,13 @@ class TestGenerateGraphFile:
             # The branch targets must NOT also be reached via a plain fan-out edge.
             assert 'graph.add_edge("node_1722397570856"' not in content
 
-    def test_if_else_uses_selected_branch_router(self):
-        """An if-else routes on selected_branch with true/false handles (ADR-0003)."""
+    def test_if_else_uses_selected_case_id_router(self):
+        """An if-else routes on Dify's own output name, with true/false handles.
+
+        `selected_case_id` is what Dify calls it; the generator used to invent
+        `selected_branch`. Dify's routing is `selected_case_id or "false"` -- no
+        matching case leaves the output unset and means the false branch.
+        """
         parser = DifyDSLParser()
         graph = parser.parse_file(FIXTURES_DIR / "ifelse_workflow.yml")
 
@@ -178,7 +183,9 @@ class TestGenerateGraphFile:
 
             content = (output_dir / "graph.py").read_text(encoding="utf-8")
             assert "def route_ifelse_node(state: GraphState) -> str:" in content
-            assert 'return state["ifelse_node"]["selected_branch"]' in content
+            assert (
+                'return state["ifelse_node"]["selected_case_id"] or "false"' in content
+            )
             assert (
                 'graph.add_conditional_edges("ifelse_node", route_ifelse_node, '
                 in content

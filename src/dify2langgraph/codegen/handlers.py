@@ -391,6 +391,21 @@ def effective_stub_output(
         below = [path[1:] for path in paths if path[0] == name]
         values[name] = _placeholder_for_paths(below, placeholder_literal(field_type))
 
+    # A handler may declare a field as an empty dict while the DSL reads through it
+    # (`[node, "headers", "x-request-id"]`). The empty literal satisfies the first
+    # step and yields None on the second, so shape it from the paths instead -- the
+    # same treatment a derived field gets.
+    annotated = _annotated_selector_types(graph)
+    for name, value in list(values.items()):
+        if value != "{}":
+            continue
+        below = [path[1:] for path in paths if path[0] == name and len(path) > 1]
+        if below:
+            # The same leaf literal a derived field would get: the DSL's value_type
+            # beside a deep selector describes the leaf, not the container.
+            leaf = placeholder_literal(annotated.get((node.id, name), "Any"))
+            values[name] = _placeholder_for_paths(below, leaf)
+
     if uses_fail_branch(node):
         # The generated router reads error_message to decide the branch, so a Stub
         # that left it at "placeholder" would route every run down the failure path.
@@ -773,6 +788,7 @@ class LlmHandler(NodeHandler):
         fields = {
             "text": "str",
             "reasoning_content": "str",
+            "finish_reason": "str",
             "usage": "dict[str, Any]",
         }
         # With structured output enabled, downstream nodes read through it --
@@ -870,7 +886,100 @@ class ToolHandler(NodeHandler):
     node_type = "tool"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"text": "str", "files": "list[dict[str, Any]]"}
+        # Dify's fixed three. A tool also contributes whatever its own plugin
+        # declares, which the DSL does not carry -- those arrive via the
+        # DSL-reference safety net (effective_output_fields) when something reads
+        # them.
+        return {"text": "str", "files": "list[Any]", "json": "list[dict[str, Any]]"}
+
+
+class HttpRequestHandler(NodeHandler):
+    node_type = "http-request"
+
+    def output_fields(self, node: NodeInfo) -> dict[str, str]:
+        # Dify's HTTP_REQUEST_OUTPUT_STRUCT. `body` is deliberately "" when the
+        # response carried files.
+        return {
+            "body": "str",
+            "status_code": "float",
+            "headers": "dict[str, Any]",
+            "files": "list[Any]",
+        }
+
+
+class DocumentExtractorHandler(NodeHandler):
+    node_type = "document-extractor"
+
+    def output_fields(self, node: NodeInfo) -> dict[str, str]:
+        # One field, whose type depends on whether the input is a single file or a
+        # list of them.
+        is_list = bool(node.data.get("is_array_file"))
+        return {"text": "list[str]" if is_list else "str"}
+
+
+class ListOperatorHandler(NodeHandler):
+    node_type = "list-operator"
+
+    def output_fields(self, node: NodeInfo) -> dict[str, str]:
+        # Types come from the node's own declaration. first_record / last_record are
+        # None on an empty result, which `Any`-or-item-type both tolerate.
+        item = annotation(node.data.get("item_var_type"))
+        return {
+            "result": annotation(node.data.get("var_type")),
+            "first_record": item,
+            "last_record": item,
+        }
+
+
+class ParameterExtractorHandler(NodeHandler):
+    node_type = "parameter-extractor"
+
+    def output_fields(self, node: NodeInfo) -> dict[str, str]:
+        fields: dict[str, str] = {}
+        for parameter in node.data.get("parameters") or []:
+            name = parameter.get("name")
+            if isinstance(name, str) and name.isidentifier():
+                # Dify's legacy spellings for two of the types.
+                declared = {"bool": "boolean", "select": "string"}.get(
+                    parameter.get("type"), parameter.get("type")
+                )
+                fields[name] = annotation(declared)
+        # Dify adds these three alongside the extracted parameters.
+        fields.update({"__is_success": "int", "__reason": "str", "__usage": "dict[str, Any]"})
+        return fields
+
+
+class _NoOutputHandler(NodeHandler):
+    """A Node that exposes nothing downstream can read.
+
+    Without this the fallback declares a single `output` field that does not exist
+    in Dify -- a placeholder nobody can use, in a TypedDict that says they can.
+    """
+
+    def output_fields(self, node: NodeInfo) -> dict[str, str]:
+        return {}
+
+
+class IterationStartHandler(_NoOutputHandler):
+    # A no-op anchor marking the entry of an iteration body (Dify's _run returns
+    # SUCCEEDED with no inputs or outputs).
+    node_type = "iteration-start"
+
+
+class LoopStartHandler(_NoOutputHandler):
+    node_type = "loop-start"
+
+
+class LoopEndHandler(_NoOutputHandler):
+    # Not a structural terminator: reaching it breaks out of the enclosing loop.
+    node_type = "loop-end"
+
+
+class AssignerHandler(_NoOutputHandler):
+    # v2 VariableAssigner. It writes to conversation / system / node variables and
+    # has no readable output of its own. Not to be confused with the legacy
+    # `variable-assigner`, which is the aggregator.
+    node_type = "assigner"
 
 
 class TemplateTransformHandler(NodeHandler):
@@ -925,7 +1034,7 @@ class AnswerHandler(NodeHandler):
     node_type = "answer"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"answer": "str"}
+        return {"answer": "str", "files": "list[Any]"}
 
 
 class AgentHandler(NodeHandler):
@@ -959,18 +1068,27 @@ class _BranchingHandler(NodeHandler):
 
 class QuestionClassifierHandler(_BranchingHandler):
     node_type = "question-classifier"
+    # Dify routes on the class id, and `class_id` is a real output of the node.
     decision_field = "class_id"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"class_name": "str", "class_id": "str"}
+        return {
+            "class_id": "str",
+            "class_name": "str",
+            "class_label": "str",
+            "usage": "dict[str, Any]",
+        }
 
 
 class IfElseHandler(_BranchingHandler):
     node_type = "if-else"
-    decision_field = "selected_branch"
+    # `selected_case_id` is Dify's own name for this output; the generator used to
+    # invent `selected_branch`, which meant anyone implementing the body -- a human
+    # or the opt-in LLM pass -- would compute the right value under the wrong name.
+    decision_field = "selected_case_id"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"selected_branch": "str"}
+        return {"result": "bool", "selected_case_id": "str"}
 
 
 _HANDLERS: dict[str, NodeHandler] = {
@@ -980,6 +1098,14 @@ _HANDLERS: dict[str, NodeHandler] = {
         LlmHandler(),
         KnowledgeRetrievalHandler(),
         CodeHandler(),
+        HttpRequestHandler(),
+        DocumentExtractorHandler(),
+        ListOperatorHandler(),
+        ParameterExtractorHandler(),
+        IterationStartHandler(),
+        LoopStartHandler(),
+        LoopEndHandler(),
+        AssignerHandler(),
         ToolHandler(),
         TemplateTransformHandler(),
         VariableAggregatorHandler(),
@@ -1049,7 +1175,12 @@ def decision_expression(node: NodeInfo, func_name: str) -> str:
     """
     handler = get_handler(node.type)
     if handler.is_branching:
-        return f'state["{func_name}"]["{handler.decision_field}"]'
+        access = f'state["{func_name}"]["{handler.decision_field}"]'
+        if node.type == "if-else":
+            # Dify's own routing is `selected_case_id or "false"`: no matching case
+            # means the false branch, and the output is unset rather than "false".
+            return f'{access} or "false"'
+        return access
     # A fail-branch node has no Dify output naming the branch -- Dify carries it out
     # of band, as NodeRunResult.edge_source_handle. What it *does* do is inject
     # error_message only on the failure path, so presence of that is the signal. No
