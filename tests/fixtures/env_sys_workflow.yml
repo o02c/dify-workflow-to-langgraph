@@ -1,0 +1,358 @@
+app:
+  description: ''
+  icon: 🤖
+  icon_background: '#FFEAD5'
+  icon_type: emoji
+  mode: workflow
+  name: test
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/gemini:0.9.9@388b2516dbfdae482e46b6a221d18a99c3ea09e6d1aced21c71260194177f7b1
+    version: null
+kind: app
+version: 0.7.0
+workflow:
+  conversation_variables: []
+  environment_variables:
+  - description: ''
+    id: f9cd64dc-454b-4a04-8820-d029a1fa66e5
+    name: API_BASE
+    selector:
+    - env
+    - API_BASE
+    value: https://example.com
+    value_type: string
+  - description: ''
+    id: 34c0fbe4-889c-4738-b08b-2c88ea8c1faf
+    name: MAX_RETRY
+    selector:
+    - env
+    - MAX_RETRY
+    value: 2
+    value_type: integer
+  - description: ''
+    id: 09256be6-dc51-4215-b43f-33dd9c8638ce
+    name: FAKE_TOKEN
+    selector:
+    - env
+    - FAKE_TOKEN
+    value: dummy-not-a-real-key
+    value_type: string
+  - description: ''
+    id: 33651208-102c-4f60-87eb-b2287aad600a
+    name: SECRET
+    selector:
+    - env
+    - SECRET
+    value: DUMMY
+    value_type: secret
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .JPG
+      - .JPEG
+      - .PNG
+      - .GIF
+      - .WEBP
+      - .SVG
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      fileUploadConfig:
+        attachment_image_file_size_limit: 2
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        file_upload_limit: 50
+        image_file_batch_limit: 10
+        image_file_size_limit: 10
+        knowledge_file_size_limit: 15
+        single_chunk_attachment_limit: 10
+        skill_file_size_limit: 50
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: llm
+      id: 1785682240366-source-1785682272592-target
+      source: '1785682240366'
+      sourceHandle: source
+      target: '1785682272592'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: llm
+        targetType: if-else
+      id: 1785682272592-source-1790169360808-target
+      source: '1785682272592'
+      sourceHandle: source
+      target: '1790169360808'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: if-else
+        targetType: end
+      id: 1790169360808-true-1785682317200-target
+      source: '1790169360808'
+      sourceHandle: 'true'
+      target: '1785682317200'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: if-else
+        targetType: end
+      id: 1790169360808-false-17901699015510-target
+      source: '1790169360808'
+      sourceHandle: 'false'
+      target: '17901699015510'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        selected: false
+        title: User Input
+        type: start
+        variables:
+        - default: ''
+          hint: ''
+          label: query
+          options: []
+          placeholder: ''
+          required: true
+          type: paragraph
+          variable: query
+        - default: en
+          hint: ''
+          label: lang
+          options: []
+          placeholder: ''
+          required: false
+          type: text-input
+          variable: lang
+        - default: '3'
+          hint: ''
+          label: topk
+          options: []
+          placeholder: ''
+          required: true
+          type: number
+          variable: topk
+        - hint: ''
+          label: style
+          options:
+          - formal
+          - casual
+          placeholder: ''
+          required: false
+          type: select
+          variable: style
+      height: 187
+      id: '1785682240366'
+      position:
+        x: 41
+        y: 193
+      positionAbsolute:
+        x: 41
+        y: 193
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        model:
+          completion_params:
+            temperature: 0.7
+          mode: chat
+          name: gemini-3.5-flash
+          provider: langgenius/gemini/google
+        prompt_template:
+        - id: eb7ffbef-6057-4193-ae91-9168dca89c4b
+          role: system
+          text: ''
+        - id: ca134774-3fed-45a4-9ac8-c859837bb2c8
+          role: user
+          text: '{{#1785682240366.query#}}
+
+            {{#env.API_BASE#}}'
+        selected: false
+        structured_output:
+          schema:
+            additionalProperties: false
+            properties:
+              answer:
+                type: string
+              random_number:
+                type: number
+            required:
+            - answer
+            - random_number
+            type: object
+        structured_output_enabled: true
+        title: LLM
+        type: llm
+        vision:
+          enabled: false
+      height: 88
+      id: '1785682272592'
+      position:
+        x: 332.94379886727813
+        y: 214
+      positionAbsolute:
+        x: 332.94379886727813
+        y: 214
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        outputs:
+        - value_selector:
+          - '1785682272592'
+          - text
+          value_type: string
+          variable: text
+        - value_selector:
+          - sys
+          - app_id
+          value_type: string
+          variable: app_id
+        - value_selector:
+          - '1785682272592'
+          - structured_output
+          - random_number
+          value_type: object
+          variable: random_number
+        selected: false
+        title: Output
+        type: end
+      height: 140
+      id: '1785682317200'
+      position:
+        x: 898.9746036738854
+        y: 187.4763575080121
+      positionAbsolute:
+        x: 898.9746036738854
+        y: 187.4763575080121
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: '>'
+            id: d57d8c01-c581-4078-aeeb-d27aecf48e68
+            numberVarType: constant
+            value: '1'
+            varType: number
+            variable_selector:
+            - env
+            - MAX_RETRY
+          logical_operator: and
+        selected: false
+        title: IF/ELSE
+        type: if-else
+      height: 124
+      id: '1790169360808'
+      position:
+        x: 616.2645254862402
+        y: 214
+      positionAbsolute:
+        x: 616.2645254862402
+        y: 214
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        desc: ''
+        isInIteration: false
+        isInLoop: false
+        outputs:
+        - value_selector:
+          - '1785682272592'
+          - text
+          value_type: string
+          variable: text
+        - value_selector:
+          - sys
+          - user_id
+          value_type: string
+          variable: user_id
+        - value_selector:
+          - '1785682272592'
+          - structured_output
+          - random_number
+          value_type: object
+          variable: number
+        selected: false
+        title: Output (1)
+        type: end
+      height: 140
+      id: '17901699015510'
+      position:
+        x: 892.9465031075244
+        y: 394.67254781797203
+      positionAbsolute:
+        x: 892.9465031075244
+        y: 394.67254781797203
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    viewport:
+      x: 76.18083458761896
+      y: 472.52950524335733
+      zoom: 0.5659264701379715
+  rag_pipeline_variables: []

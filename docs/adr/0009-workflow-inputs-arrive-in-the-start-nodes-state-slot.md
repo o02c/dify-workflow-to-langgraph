@@ -38,5 +38,37 @@ caller passes.
   rather than an immediate `ValueError`.
 - **Generated output changed**, so the ADR-0001 reference digest moved. Callers
   that previously invoked with `{}` must now pass the declared inputs.
-- `sys.*` (ADR-0004) is still unimplemented. It is a different namespace —
-  workflow-level runtime inputs such as `sys.query` — and is unaffected by this.
+- `sys.*` (ADR-0004) is a different namespace — workflow-level runtime inputs
+  such as `sys.query` — and arrives separately. It is now implemented, and reads
+  of it are guarded the same way: a named `ValueError` listing the missing fields
+  rather than a bare `KeyError` from inside whichever body read it first.
+
+## Correction: `required` beats `default`
+
+The first implementation treated a declared `default` as satisfying a
+`required: true` variable — "there is already a value to use". **That is not
+Dify's rule, and it let a generated package run a workflow Dify itself would
+reject.** `api/core/app/apps/base_app_generator.py::_validate_inputs`:
+
+```python
+if value is None:
+    if variable_entity.required:
+        raise ValueError(f"{variable_entity.variable} is required in input form")
+    # Use default value and continue validation to ensure type conversion
+    value = variable_entity.default
+```
+
+`required` is checked first and `default` is only read on the non-required branch.
+So `required: true` raises whatever the default is, and the generated body indexes
+(`supplied["topk"]`) rather than defaulting — substituting the default would have
+hidden the same omission one layer down.
+
+This also removes a heuristic. Dify writes `default: ''` for every field where the
+author set nothing, which is why the original rule disabled the required check on
+*every* real export; the empty-string special case was patching that rather than
+the rule. `declared_default` still discards `''` — Dify does the same for an
+unsupplied optional variable — but nothing required depends on it any more.
+
+Number defaults follow Dify too: it converts with `int()` unless the string has a
+decimal point, so `'3'` is `3`, not `3.0`. Emitting `3.0` put "3.0" into any
+prompt that interpolated the value.

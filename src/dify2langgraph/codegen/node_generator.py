@@ -6,7 +6,13 @@ This module generates individual node files in the nodes/ directory.
 import json
 from pathlib import Path
 
-from dify2langgraph.codegen.handlers import get_handler
+from dify2langgraph.codegen.handlers import (
+    get_handler,
+    reference_access,
+    referenced_sys_fields_for,
+    resolvable_env_references,
+    sys_prelude,
+)
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
@@ -72,7 +78,7 @@ def _generate_node_file(
                 "raw": ref.raw,
                 "node_id": ref.node_id,
                 "field_path": ref.field_path,
-                "state_access": ref.to_state_access(node_name_map),
+                "state_access": reference_access(ref, node_name_map),
             }
             for ref in node.references
         ],
@@ -95,10 +101,38 @@ def _generate_node_file(
 
     # Local imports, sorted as one block: the handler's extra imports (e.g. the
     # Retriever port) can sort before `..state`, so they cannot just be appended.
+    # Computed here rather than at the point of use: whether the body reads an
+    # env constant decides whether the module has to be imported, and an import
+    # the Stub never uses is a lint failure in the generated package.
+    body_prelude = handler.body_prelude(node, graph, node_name_map)
+    body_output = handler.stub_output(node, graph, node_name_map)
+
+    # Guard the caller-supplied sys.* this body reads, for the same reason the
+    # Start Node guards its workflow inputs. Only for a deterministic body: a Stub
+    # does not read them yet, and rejecting an input nothing consumes would be
+    # stricter than the workflow.
+    if not handler.emits_stub_body:
+        guard = sys_prelude(referenced_sys_fields_for(node))
+        if guard:
+            body_prelude = [*guard, *(["", *body_prelude] if body_prelude else [])]
+
+    # Which env.* references this node can actually reach. Filtered against the
+    # DSL's own declarations because env.py only contains what the DSL declares
+    # -- and is not generated at all when it declares nothing, so importing it
+    # on the strength of a reference alone breaks the whole package rather than
+    # the one reference. The body reads them only when it is deterministic; a
+    # Stub body just documents them, and an unused import fails the generated
+    # package's own lint check.
+    env_refs = resolvable_env_references(node, graph)
+    uses_env = bool(env_refs) and not handler.emits_stub_body
+
     local_imports = [
         "from ..state import " + ", ".join(sorted(["GraphState", class_name])),
         *handler.body_imports(node),
     ]
+    if uses_env:
+        # env.* are constants in the generated env.py, not state (ADR-0004).
+        local_imports.append("from .. import env")
     lines.extend(sorted(local_imports))
 
     lines += [
@@ -141,7 +175,13 @@ def _generate_node_file(
     if node.references:
         lines.append("    # How to access input variables:")
         for ref in node.references:
-            lines.append(f"    # {ref.raw} -> {ref.to_state_access(node_name_map)}")
+            lines.append(f"    # {ref.raw} -> {reference_access(ref, node_name_map)}")
+        if env_refs and not uses_env:
+            # The comment above names `env.X`, which resolves to nothing until the
+            # module is imported. Say so here rather than leaving a NameError for
+            # whoever fills the body in.
+            lines.append("    # env.* are module constants: add `from .. import env` above")
+            lines.append("    # when your implementation reads them.")
         lines.append("")
 
     # Generate the node body. The handler owns the output values: most types emit
@@ -154,11 +194,10 @@ def _generate_node_file(
     else:
         lines.append(f"    # Deterministic {node.type} node (generated from the Dify DSL)")
     lines.append("")
-    prelude = handler.body_prelude(node, graph, node_name_map)
-    if prelude:
-        lines.extend(prelude)
+    if body_prelude:
+        lines.extend(body_prelude)
         lines.append("")
-    stub_output = handler.stub_output(node, graph, node_name_map)
+    stub_output = body_output
     lines.append(f"    output: {class_name} = {{")
     for field_name, literal in stub_output.items():
         lines.append(f'        "{field_name}": {literal},')
@@ -193,14 +232,21 @@ def _generate_nodes_init(
     ]
 
     # Import and re-export each node function
-    for node in nodes:
-        func_name, _ = get_node_names(node.id, node_name_map)
+    # Sorted, not DSL order: ruff's I001 flags an unsorted import block, and the
+    # generated package is expected to be lint-clean. Existing fixtures happened
+    # to be sorted already (numeric Dify ids ascend); a chatflow's mix of named
+    # and numeric ids is what exposed it.
+    for func_name in sorted(
+        get_node_names(node.id, node_name_map)[0] for node in nodes
+    ):
         lines.append(f"from .{func_name} import {func_name}")
 
     lines.append("")
+    # Sorted for the same reason (ruff RUF022).
     lines.append("__all__ = [")
-    for node in nodes:
-        func_name, _ = get_node_names(node.id, node_name_map)
+    for func_name in sorted(
+        get_node_names(node.id, node_name_map)[0] for node in nodes
+    ):
         lines.append(f'    "{func_name}",')
     lines.append("]")
     lines.append("")

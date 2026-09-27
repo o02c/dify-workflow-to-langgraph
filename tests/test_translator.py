@@ -359,8 +359,14 @@ class TestStartNodeInputContract:
 
             assert "supplied.get(\"lang\", 'en')" in body
 
-    def test_a_default_makes_a_required_variable_satisfiable(self):
-        """Required + default is not "missing": there is already a value to use."""
+    def test_a_declared_default_does_not_excuse_a_required_variable(self):
+        """Dify raises for an absent required variable whatever its default is.
+
+        `_validate_inputs` checks `required` first and only reads `default` on the
+        non-required branch, so accepting a required variable because it declares
+        one would run a workflow Dify itself would reject -- and substituting the
+        default would then hide it.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             body = self._generate_with_start_variables(
                 tmpdir,
@@ -370,9 +376,27 @@ class TestStartNodeInputContract:
                 ],
             )
 
-            assert 'missing = [name for name in ("query",)' in body
-            assert "topk" not in body.split("missing = ")[1].split("]")[0]
-            assert 'supplied.get("topk", 5)' in body
+            assert 'missing = [name for name in ("query", "topk",)' in body
+            assert 'supplied["topk"]' in body
+            assert "supplied.get(\"topk\"" not in body
+
+    def test_an_optional_number_default_keeps_dify_s_own_numeric_type(self):
+        """Dify uses int() unless the string has a decimal point.
+
+        A number default exports as a string (`'3'`). Coercing it to float put
+        "3.0" into anything that interpolated the value.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            body = self._generate_with_start_variables(
+                tmpdir,
+                [
+                    {"variable": "whole", "type": "number", "default": "3"},
+                    {"variable": "fraction", "type": "number", "default": "2.5"},
+                ],
+            )
+
+            assert 'supplied.get("whole", 3)' in body
+            assert 'supplied.get("fraction", 2.5)' in body
 
     def test_optional_inputs_get_defaults(self):
         """Only required variables are enforced; optional ones fall back."""
@@ -384,6 +408,231 @@ class TestStartNodeInputContract:
 
             assert 'supplied["source_text"]' in body  # required
             assert 'supplied.get("country", "")' in body  # required: false
+
+
+class TestRealDslEnvSysWorkflow:
+    """Shapes pinned down by env_sys_workflow.yml, built in Dify Cloud.
+
+    Every assertion here failed against the real export before this fixture
+    existed -- the hand-written fixtures happened to avoid all of them.
+    """
+
+    def test_every_required_variable_is_enforced(self):
+        """The real export marks `query` and `topk` required; both are checked.
+
+        `query` carries `default: ''` and `topk` carries `default: '3'` -- the two
+        shapes that each used to let a required variable through.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1785682240366.py").read_text(encoding="utf-8")
+
+            assert 'missing = [name for name in ("query", "topk",)' in body
+            assert 'supplied["query"]' in body
+            assert 'supplied["topk"]' in body
+
+
+    def test_structured_output_is_declared_and_shaped(self):
+        """A downstream read of structured_output used to raise KeyError.
+
+        The End node forwards `[<llm>, "structured_output", "random_number"]`, but
+        the LLM handler declared only text/usage, so the generated package crashed
+        at run time on any workflow using structured output.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            state = (output_dir / "state.py").read_text(encoding="utf-8")
+            body = (output_dir / "nodes" / "node_1785682272592.py").read_text(encoding="utf-8")
+
+            assert "structured_output: dict[str, Any]" in state
+            # Shaped from the DSL's own schema, so a downstream read resolves.
+            assert '"answer": "placeholder"' in body
+            assert '"random_number": 0.0' in body
+
+    def test_sys_selector_resolves_to_the_reserved_key(self):
+        """`[sys, app_id]` reaches `state["sys"]["app_id"]` (ADR-0004)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1785682317200.py").read_text(encoding="utf-8")
+
+            assert '"app_id": state["sys"]["app_id"]' in body
+
+    def test_only_referenced_sys_fields_are_declared(self):
+        """The sys catalogue is mode-dependent, so the DSL decides what exists.
+
+        `sys.query` is chatflow-only while `sys.app_id` appears in workflow mode --
+        a fixed list would be wrong for one of them.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workflow_dir = Path(tmpdir) / "wf"
+            chat_dir = Path(tmpdir) / "chat"
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", workflow_dir)
+            translate(FIXTURES_DIR / "chatflow_sys_query.yml", chat_dir)
+
+            wf_state = (workflow_dir / "state.py").read_text(encoding="utf-8")
+            chat_state = (chat_dir / "state.py").read_text(encoding="utf-8")
+
+            def sys_block(state_source: str) -> str:
+                """The SysInputs body only -- a Start variable may share a name."""
+                return state_source.split("class SysInputs")[1].split("class ")[0]
+
+            wf_sys = sys_block(wf_state)
+            chat_sys = sys_block(chat_state)
+
+            assert "app_id: str" in wf_sys and "user_id: str" in wf_sys
+            assert "query" not in wf_sys
+            # files is a list of uploads, not an id.
+            assert "query: str" in chat_sys and "files: list[Any]" in chat_sys
+            assert "app_id" not in chat_sys
+
+    def test_env_is_not_in_state(self):
+        """`env` is constants outside state, so GraphState must not carry it."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            state = (output_dir / "state.py").read_text(encoding="utf-8")
+
+            assert "env:" not in state
+
+    def test_env_reference_points_at_the_constants_module(self):
+        """Not `state["env"][...]`, which nothing can resolve.
+
+        The generated comments and NODE_CONFIG block are what the LLM
+        body-generation pass reads, so an address that cannot resolve there
+        teaches the model to write code that fails.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1785682272592.py").read_text(encoding="utf-8")
+
+            assert "# env.API_BASE -> env.API_BASE" in body
+            assert 'state["env"]' not in body
+
+    def test_a_stub_body_is_told_how_to_reach_the_constants(self):
+        """The comment names `env.API_BASE`; nothing imports it yet.
+
+        With `--skip-implement` the body is the developer's to write, and an
+        unused import would fail the generated package's own lint check -- so the
+        import is not emitted. Without saying so, following the comment above
+        gives a NameError.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1785682272592.py").read_text(
+                encoding="utf-8"
+            )
+
+            assert "import env" not in body.split("def ")[0]  # not in the imports
+            assert "add `from .. import env` above" in body
+
+
+class TestEnvConstantsModule:
+    """env.py: DSL constants, with secrets deliberately left out (ADR-0004)."""
+
+    def _generate(self, tmpdir: str) -> str:
+        """Generate the env fixture and return env.py's source."""
+        output_dir = Path(tmpdir)
+        translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
+        return (output_dir / "env.py").read_text(encoding="utf-8")
+
+    def test_non_secret_values_become_typed_constants(self):
+        """An integer stays an integer; a string stays a string."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = self._generate(tmpdir)
+
+            assert "API_BASE = 'https://example.com'" in source
+            assert "MAX_RETRY = 2" in source
+
+    def test_a_secret_value_is_never_written_into_source(self):
+        """Dify exports a secret's value in plaintext; it must not land here.
+
+        The fixture's secret is `DUMMY`, so its presence in the generated module
+        would mean a real deployment writes a real credential into a file the
+        customer commits.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = self._generate(tmpdir)
+
+            assert "DUMMY" not in source
+            # `SECRET` alone would be satisfied by the machinery's own identifiers,
+            # so assert the name is declared where it has to be: the required list.
+            assert "REQUIRED_ENV_VARS = ('SECRET',)" in source
+
+    def test_the_required_variables_are_listed_publicly(self):
+        """A caller can check the list up front instead of failing mid-run.
+
+        Resolution itself is tested in test_generated.py: it depends on the real
+        module's location, which only a genuine import reproduces.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = self._generate(tmpdir)
+
+            assert "REQUIRED_ENV_VARS = ('SECRET',)" in source
+            # Secrets exist only inside __getattr__, so dir() has to be told.
+            assert "def __dir__()" in source
+
+    def test_no_env_file_when_the_dsl_declares_none(self):
+        """Most workflows declare no environment variables at all."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
+
+            assert not (output_dir / "env.py").exists()
+
+
+class TestChatflowShape:
+    """A chatflow ends on an `answer` node and declares no `end` node at all."""
+
+    def test_answer_node_terminates_the_graph(self):
+        """Keying END off `end` nodes left the terminal dangling.
+
+        It also left `END` imported but unused, which ruff flags in the generated
+        package.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "chatflow_sys_query.yml", output_dir)
+
+            graph = (output_dir / "graph.py").read_text(encoding="utf-8")
+
+            assert 'graph.add_edge("answer", END)' in graph
+
+    def test_node_all_is_sorted(self):
+        """ruff's RUF022 flags an unsorted __all__ in the generated package."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "chatflow_sys_query.yml", output_dir)
+
+            init = (output_dir / "nodes" / "__init__.py").read_text(encoding="utf-8")
+            names = [
+                line.strip().strip('",')
+                for line in init.split("__all__ = [")[1].split("]")[0].splitlines()
+                if line.strip()
+            ]
+
+            assert names == sorted(names)
+
+    def test_start_with_no_variables_is_a_passthrough(self):
+        """In a chatflow the user's input is sys.query, not a Start variable."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(FIXTURES_DIR / "chatflow_sys_query.yml", output_dir)
+
+            body = (output_dir / "nodes" / "node_1790170151582.py").read_text(encoding="utf-8")
+
+            assert 'supplied.get("inputs", {})' in body
+            assert "missing" not in body
 
 
 class TestGeneratedOutputIsByteStableAcrossPlatforms:
