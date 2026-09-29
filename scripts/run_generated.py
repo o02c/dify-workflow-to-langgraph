@@ -2,7 +2,7 @@
 """Run a generated LangGraph package and print its final state as JSON.
 
 The generated output is a self-contained package run with ``python -m <pkg>``
-from its parent directory (ADR-0007). Its ``__main__.py`` prints the final state
+from its parent directory. Its ``__main__.py`` prints the final state
 with ``print(result)`` -- a Python ``repr``, which is fine to read but awkward to
 assert on from another language.
 

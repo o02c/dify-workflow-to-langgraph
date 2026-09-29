@@ -18,7 +18,7 @@ from dify2langgraph.cli import translate
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 # Name of the generated package directory (a valid Python identifier so it can be
-# imported as a package, exercising the relative imports -- ADR-0007).
+# imported as a package, exercising the relative imports).
 _PKG = "wf"
 
 # Snippet run from the package's parent dir: import the generated package, invoke
@@ -103,7 +103,7 @@ class TestGeneratedGraphRuns:
         assert sorted(state) == ["end_node", "llm_node", "start_node"]
 
     def test_package_runs_as_module(self, tmp_path):
-        """`python -m <pkg>` runs the __main__ entry point end-to-end (ADR-0007)."""
+        """`python -m <pkg>` runs the __main__ entry point end-to-end."""
         translate(FIXTURES_DIR / "simple_workflow.yml", tmp_path / _PKG)
         proc = _run_python(["-m", _PKG], tmp_path)
         assert proc.returncode == 0, proc.stderr
@@ -134,7 +134,7 @@ class TestGeneratedGraphRuns:
         assert "\\u7ffb" in proc.stdout  # escaped, not crashed
 
     def test_workflow_inputs_reach_the_graph(self, tmp_path):
-        """The caller's inputs survive the Start Node (ADR-0009).
+        """The caller's inputs survive the Start Node.
 
         They used to be overwritten: the Start Node emitted a Stub returning
         {"query": "placeholder"}, so a generated workflow could not be given
@@ -145,7 +145,7 @@ class TestGeneratedGraphRuns:
         )
 
         assert state["start_node"]["query"] == "CALLER_VALUE"
-        # And it flows downstream: End forwards the LLM node's text (ADR-0004).
+        # And it flows downstream: End forwards the LLM node's text.
         assert state["end_node"]["result"] == state["llm_node"]["text"]
 
     def test_missing_required_input_fails_loudly(self, tmp_path):
@@ -159,7 +159,7 @@ class TestGeneratedGraphRuns:
         assert "query" in proc.stdout + proc.stderr
 
     def test_end_node_forwards_upstream_value(self, tmp_path):
-        """The End node deterministically forwards an upstream field (ADR-0004).
+        """The End node deterministically forwards an upstream field.
 
         Its ``result`` output is wired to ``state["llm_node"]["text"]``, so after a
         run the End output equals the LLM node's text rather than a placeholder.
@@ -178,14 +178,14 @@ class TestGeneratedGraphRuns:
         # Every node currently gets a stub, so invocation completes without error.
         assert "node_1722391426202" in state  # start
         assert "node_1722397570856" in state  # question-classifier
-        # knowledge-retrieval calls the Retriever port; unconfigured -> [] (ADR-0006),
+        # knowledge-retrieval calls the Retriever port; unconfigured -> [],
         # so the graph still runs end-to-end without Dify API credentials.
         assert state["node_1722397470145"]["result"] == []
 
     def test_question_classifier_routes_to_single_branch(self, tmp_path):
         """A question-classifier reaches exactly one of its downstream ends.
 
-        Routing is generated per ADR-0003: the stub defaults the decision field
+        The stub defaults the decision field
         (``class_id``) to the first branch key, so the router resolves to a single
         successor instead of fanning out to every branch.
         """
@@ -225,7 +225,7 @@ class TestRealWorkflows:
             "env_sys_workflow.yml",
             {
                 "node_1785682240366": {"query": "hello", "topk": 5.0},
-                # sys.* is supplied by the caller under its reserved key (ADR-0004);
+                # sys.* is supplied by the caller under its reserved key;
                 # the End node forwards sys.app_id.
                 "sys": {"app_id": "APP-1", "user_id": "U-9"},
             },
@@ -273,7 +273,7 @@ class TestRealWorkflows:
     def test_json_translate_workflow_builds_and_runs(self, tmp_path):
         """A real workflow using code/tool/iteration still builds and invokes.
 
-        Iteration internals are stubbed via the fallback handler (ADR-0005 leaves
+        Iteration internals are stubbed via the fallback handler (the converter leaves
         the iteration shape open), but the graph must still compile and run.
         """
         state = _generate_and_run(
@@ -894,7 +894,7 @@ class TestFailBranchIsABranch:
 
     Dify exports a second outgoing edge with `sourceHandle: fail-branch` beside the
     ordinary `source` one. Emitting both as unconditional edges meant the failure
-    path ran on a successful run -- the same bug ADR-0003 exists to prevent.
+    path ran on a successful run -- the same bug conditional routing exists to prevent.
     """
 
     _FIXTURE = "error_strategy_workflow.yml"

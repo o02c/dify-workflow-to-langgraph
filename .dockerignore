@@ -19,12 +19,10 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Not needed to build or run the converter.
+# Not needed to build or run the converter. The Dockerfile copies an explicit
+# allowlist (pyproject.toml, uv.lock, src), so this list only keeps the build
+# context small.
 tests/
-docs/
-CONTEXT.md
-TODO.md
-requirement.md
 Makefile
 scripts/
 compose.yaml
