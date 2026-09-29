@@ -1,4 +1,4 @@
-"""Tests for the Node Handler registry (ADR-0005)."""
+"""Tests for the Node Handler registry."""
 
 from pathlib import Path
 
@@ -249,7 +249,7 @@ class TestStubOutput:
 
 
 class TestEndDeterministicBody:
-    """The End node forwards upstream values via normalized accesses (ADR-0004)."""
+    """The End node forwards upstream values via normalized accesses."""
 
     def test_end_forwards_value_selector_as_state_access(self):
         graph = DifyDSLParser().parse_file(FIXTURES_DIR / "simple_workflow.yml")
@@ -273,7 +273,7 @@ class TestEndDeterministicBody:
 
     def test_end_handler_marks_body_as_deterministic(self):
         assert get_handler("end").emits_stub_body is False
-        # Start is deterministic too (ADR-0009): it surfaces the caller's inputs.
+        # Start is deterministic too: it surfaces the caller's inputs.
         assert get_handler("start").emits_stub_body is False
         # if-else was the only registered handler never named here.
         assert get_handler("if-else").node_type == "if-else"
@@ -281,7 +281,7 @@ class TestEndDeterministicBody:
 
 
 class TestKnowledgeRetrievalBody:
-    """knowledge-retrieval calls the Retriever port (ADR-0006)."""
+    """knowledge-retrieval calls the Retriever port."""
 
     def test_calls_retriever_with_normalized_query_and_dataset_ids(self):
         graph = DifyDSLParser().parse_file(FIXTURES_DIR / "guardduty_handler.yml")

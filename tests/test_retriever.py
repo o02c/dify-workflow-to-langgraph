@@ -1,4 +1,4 @@
-"""Tests for the Retriever port template (ADR-0006).
+"""Tests for the Retriever port template.
 
 The template is copied verbatim into every generated package; here we import it
 in place and check the default adapter's behavior.

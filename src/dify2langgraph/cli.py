@@ -9,10 +9,12 @@ import sys
 from pathlib import Path
 
 from dify2langgraph.codegen import (
+    generate_dockerfile,
     generate_env_file,
     generate_graph_file,
     generate_nodes_directory,
     generate_package_files,
+    generate_requirements_file,
     generate_state_file,
 )
 from dify2langgraph.logging_config import get_logger
@@ -53,6 +55,10 @@ def translate(
     generate_graph_file(graph, output_dir, node_name_map)
     generate_package_files(graph, output_dir, node_name_map)
     generate_env_file(graph, output_dir)
+    # What the package needs to run: the dependency list, and a Dockerfile for a
+    # recipient who would rather not touch their own Python installation.
+    generate_requirements_file(graph, output_dir)
+    generate_dockerfile(output_dir.name, output_dir)
 
     # Copy template files
     copy_templates(output_dir)
@@ -77,7 +83,8 @@ def copy_templates(output_dir: Path) -> None:
         dest = output_dir / template_file.name
         # Re-write rather than shutil.copy: a byte copy would carry CRLF into the
         # output if the checkout has it (Git for Windows does this by default),
-        # and the generated package must be byte-identical everywhere (ADR-0001).
+        # and the generated package must be byte-identical everywhere: the same
+        # input has to produce the same bytes on any operating system.
         # .gitattributes also pins these to LF; this makes the output correct even
         # when the templates arrive from somewhere else.
         dest.write_text(

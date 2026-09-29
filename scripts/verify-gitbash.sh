@@ -11,7 +11,7 @@
 # Docker is out of scope, deliberately. `pwd -W` -- the piece of USAGE 9.2 that is
 # Git-Bash-specific -- is checked (M2), but the bind mount it feeds is not: Docker
 # Desktop for Windows cannot be reached from the verification environment, so a
-# Docker group here would never execute. See docs/development.md.
+# Docker group here would never execute.
 #
 # Companion to scripts/verify-windows.ps1, which covers the PowerShell-specific
 # claims. Both delegate the substantive work to the same two Python helpers
@@ -419,7 +419,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# F. Generated workflows actually run (ADR-0007, ADR-0009)
+# F. Generated workflows actually run
 # ---------------------------------------------------------------------------
 section "F. Generated workflows run"
 
@@ -427,7 +427,7 @@ GEN_DIR="$WORK/gen"
 (cd "$WORK" && run_cli simple_workflow.yml -o "$GEN_DIR" --skip-implement >/dev/null 2>&1)
 (cd "$WORK" && run_cli guardduty_handler.yml -o "$GEN_DIR" --skip-implement >/dev/null 2>&1)
 
-# Workflow inputs go under the Start Node's own key (ADR-0009); a required one
+# Workflow inputs go under the Start Node's own key; a required one
 # that is absent raises rather than being invented.
 printf '%s' '{"start_node": {"query": "example"}}' > "$WORK/f1.json"
 F1_OUT="$(run_py "$RUN_PY" "$GEN_DIR" simple_workflow --initial-file "$WORK/f1.json")"
@@ -442,9 +442,9 @@ else
 fi
 
 if printf '%s' "$F1_JSON" | grep -q '"query": "example"'; then
-  add_result F2 PASS "The caller's workflow inputs survive the Start Node (ADR-0009)"
+  add_result F2 PASS "The caller's workflow inputs survive the Start Node"
 else
-  add_result F2 FAIL "The caller's workflow inputs survive the Start Node (ADR-0009)" \
+  add_result F2 FAIL "The caller's workflow inputs survive the Start Node" \
     "$(printf '%s' "$F1_JSON" | cut -c1-200)"
 fi
 
