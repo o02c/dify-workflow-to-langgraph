@@ -1,8 +1,10 @@
 """Tests for the Dify DSL parser."""
 
+import logging
 from pathlib import Path
 
 import pytest
+import yaml
 
 from dify2langgraph.parser import (
     VARIABLE_REFERENCE_PATTERN,
@@ -363,3 +365,41 @@ class TestEdgeParsing:
         # Should have edges with different handles
         handles = {e.source_handle for e in classifier_edges}
         assert len(handles) >= 2  # At least two branches
+
+
+_ABSENT = object()
+
+
+class TestDslVersionWarning:
+    """An untested DSL version is surfaced, never rejected.
+
+    A customer's export has to convert. But real fixtures span 0.1.0 / 0.1.3 / 0.7.0
+    and one declares no version at all, so the field genuinely varies -- and a silent
+    misread of a shape Dify has moved is worse than a line of warning.
+    """
+
+    def _parse(self, version, caplog):
+        """Parse the env/sys fixture with `version` replaced, returning the log."""
+        dsl = yaml.safe_load(
+            (FIXTURES_DIR / "error_strategy_workflow.yml").read_text(encoding="utf-8")
+        )
+        if version is _ABSENT:
+            dsl.pop("version", None)
+        else:
+            dsl["version"] = version
+        with caplog.at_level(logging.WARNING):
+            DifyDSLParser().parse(dsl)
+        return caplog.text
+
+    def test_a_tested_version_is_silent(self, caplog):
+        assert "version" not in self._parse("0.7.0", caplog).lower()
+
+    def test_a_newer_version_warns_without_failing(self, caplog):
+        text = self._parse("0.9.1", caplog)
+        assert "0.9.1" in text and "0.7.0" in text
+
+    def test_a_missing_version_warns(self, caplog):
+        assert "declares no version" in self._parse(_ABSENT, caplog)
+
+    def test_an_unparseable_version_warns(self, caplog):
+        assert "Unrecognised DSL version" in self._parse("next", caplog)

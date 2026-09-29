@@ -22,6 +22,7 @@ from typing import Any
 from dify2langgraph.codegen.env_vars import declared_names
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.codegen.routing import default_branch_key
+from dify2langgraph.codegen.var_types import annotation
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
 
@@ -232,6 +233,224 @@ def referenced_sys_fields_for(node: NodeInfo) -> list[str]:
     return list(seen)
 
 
+def _annotated_selector_types(graph: WorkflowGraph) -> dict[tuple[str, str], str]:
+    """`(source node id, field)` -> Python annotation, from the DSL's own labels.
+
+    Wherever the DSL points at another node's output it usually annotates the
+    selector with the type it expects -- End outputs, and the `variables` list of a
+    code / template-transform node, all carry `value_selector` next to
+    `value_type`. Collected generically rather than per Node type, because the
+    pairing is a DSL convention rather than a per-type one.
+
+    Args:
+        graph: The parsed workflow.
+
+    Returns:
+        A lookup used to type fields that no handler declared.
+    """
+    types: dict[tuple[str, str], str] = {}
+
+    def walk(obj: Any) -> None:
+        if isinstance(obj, dict):
+            selector = obj.get("value_selector")
+            if isinstance(selector, list) and len(selector) >= 2 and "value_type" in obj:
+                key = (str(selector[0]), str(selector[1]))
+                types.setdefault(key, annotation(obj.get("value_type")))
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    for node in graph.nodes.values():
+        walk(node.data)
+    return types
+
+
+def _paths_read_from(node_id: str, graph: WorkflowGraph) -> list[list[str]]:
+    """Every field path other nodes read out of one node, deduplicated.
+
+    Args:
+        node_id: The node whose outputs are being read.
+        graph: The parsed workflow.
+
+    Returns:
+        Field paths, e.g. ``[["body"], ["headers", "x-request-id"]]``.
+    """
+    seen: list[list[str]] = []
+    for other in graph.nodes.values():
+        for ref in other.references:
+            if ref.node_id != node_id or not ref.field_path:
+                continue
+            path = [str(part) for part in ref.field_path]
+            if path not in seen:
+                seen.append(path)
+    return seen
+
+
+def _placeholder_for_paths(paths: list[list[str]], leaf: str) -> str:
+    """A literal shaped so every one of `paths` resolves when read.
+
+    A selector may reach deeper than one field (``[node, "headers", "x"]``). A flat
+    placeholder satisfies the first step and raises on the second, so the nesting is
+    rebuilt from the paths themselves -- the same idea as
+    :func:`json_schema_placeholder`, applied to selector paths instead of a schema.
+
+    Args:
+        paths: Field paths below a single field, relative to that field.
+        leaf: The literal to use where a path ends.
+
+    Returns:
+        A Python expression source.
+    """
+    if not paths or any(not path for path in paths):
+        return leaf
+    grouped: dict[str, list[list[str]]] = {}
+    for path in paths:
+        grouped.setdefault(path[0], []).append(path[1:])
+    pairs = ", ".join(
+        f"{json.dumps(name)}: {_placeholder_for_paths(rest, leaf)}"
+        for name, rest in grouped.items()
+    )
+    return "{" + pairs + "}"
+
+
+def derived_output_fields(node: NodeInfo, graph: WorkflowGraph) -> dict[str, str]:
+    """Fields other nodes read from this node that no handler declared.
+
+    The safety net. A Node type the generator does not know gets the fallback's
+    single `output` field, so a downstream selector reading the type's real output
+    raised `KeyError` at run time -- conversion succeeded and the package crashed.
+    Rather than racing Dify's node catalogue, take the DSL's word for it: whatever
+    something reads from this node is declared on it.
+
+    Args:
+        node: The Node being generated.
+        graph: The parsed workflow.
+
+    Returns:
+        Field name -> annotation, for fields the handler does not already declare.
+    """
+    handler_fields = get_handler(node.type).output_fields(node)
+    annotated = _annotated_selector_types(graph)
+    derived: dict[str, str] = {}
+    for path in _paths_read_from(node.id, graph):
+        name = path[0]
+        if name in handler_fields or name in derived or not name.isidentifier():
+            continue
+        derived[name] = annotated.get((node.id, name), "Any")
+    return derived
+
+
+def effective_output_fields(node: NodeInfo, graph: WorkflowGraph) -> dict[str, str]:
+    """What the generated `TypedDict` declares for a node.
+
+    Args:
+        node: The Node being generated.
+        graph: The parsed workflow.
+
+    Returns:
+        The handler's declaration, plus anything the DSL reads that it missed.
+        The handler wins on conflicts -- it knows the type, the DSL only knows a
+        label.
+    """
+    fields = dict(get_handler(node.type).output_fields(node))
+    if node.data.get("error_strategy"):
+        # Both of Dify's error strategies inject these, so a node with error
+        # handling enabled can always be read for them.
+        fields.update(ERROR_OUTPUT_FIELDS)
+    fields.update(derived_output_fields(node, graph))
+    return fields
+
+
+def effective_stub_output(
+    node: NodeInfo,
+    graph: WorkflowGraph,
+    node_name_map: dict[str, tuple[str, str]] | None = None,
+) -> dict[str, str]:
+    """The node body's output dict, matching :func:`effective_output_fields`.
+
+    Emitted from the same place as the declaration so the two cannot drift: a
+    field in `state.py` that the body never writes is still a `KeyError`.
+
+    Args:
+        node: The Node being generated.
+        graph: The parsed workflow.
+        node_name_map: Optional node_id -> (snake_case, CamelCase) mapping.
+
+    Returns:
+        Field name -> Python expression source.
+    """
+    handler = get_handler(node.type)
+    values = dict(handler.stub_output(node, graph, node_name_map))
+    derived = derived_output_fields(node, graph)
+    paths = _paths_read_from(node.id, graph)
+    for name, field_type in derived.items():
+        if name in values:
+            continue
+        below = [path[1:] for path in paths if path[0] == name]
+        values[name] = _placeholder_for_paths(below, placeholder_literal(field_type))
+
+    # A handler may declare a field as an empty dict while the DSL reads through it
+    # (`[node, "headers", "x-request-id"]`). The empty literal satisfies the first
+    # step and yields None on the second, so shape it from the paths instead -- the
+    # same treatment a derived field gets.
+    annotated = _annotated_selector_types(graph)
+    for name, value in list(values.items()):
+        if value != "{}":
+            continue
+        below = [path[1:] for path in paths if path[0] == name and len(path) > 1]
+        if below:
+            # The same leaf literal a derived field would get: the DSL's value_type
+            # beside a deep selector describes the leaf, not the container.
+            leaf = placeholder_literal(annotated.get((node.id, name), "Any"))
+            values[name] = _placeholder_for_paths(below, leaf)
+
+    if uses_fail_branch(node):
+        # The generated router reads error_message to decide the branch, so a Stub
+        # that left it at "placeholder" would route every run down the failure path.
+        # Unset is also what Dify has on a successful run, and it keeps the
+        # convention that a stubbed graph resolves to exactly one successor.
+        for name in ERROR_OUTPUT_FIELDS:
+            if name in values:
+                values[name] = "None"
+    return values
+
+
+def declared_output_fields(node: NodeInfo) -> dict[str, str] | None:
+    """The node's own output declaration from the DSL, if it carries one.
+
+    A `code` node declares its outputs in the DSL, with types::
+
+        outputs:
+          body_head: { type: string }
+          rows:      { type: array[object] }
+
+    Reading that beats any table we could keep: it is the workflow author's own
+    answer, it is exact, and it needs no knowledge of Dify. The generator used to
+    emit an invented `result` / `stdout` / `stderr` instead -- `stdout` and `stderr`
+    are not Dify outputs at all -- so a downstream read of a declared name raised
+    `KeyError` at run time.
+
+    Args:
+        node: The Node being generated.
+
+    Returns:
+        Field name -> Python annotation, or None when the node declares nothing in
+        this shape (the End node's `outputs` is a *list*, a different thing).
+    """
+    declared = node.data.get("outputs")
+    if not isinstance(declared, dict) or not declared:
+        return None
+    fields: dict[str, str] = {}
+    for name, spec in declared.items():
+        if not isinstance(name, str) or not name.isidentifier():
+            continue
+        spec_type = spec.get("type") if isinstance(spec, dict) else None
+        fields[name] = annotation(spec_type)
+    return fields or None
+
+
 def resolve_selector(
     selector: list[Any],
     graph: WorkflowGraph,
@@ -253,7 +472,8 @@ def resolve_selector(
         return None
 
     source = selector[0]
-    if source in graph.nodes:
+    from_node = source in graph.nodes
+    if from_node:
         key, _ = get_node_names(str(source), node_name_map)
     elif source == SYS_NAMESPACE:
         # ADR-0004: sys lives in state under its own reserved key.
@@ -274,9 +494,30 @@ def resolve_selector(
     else:
         return None
 
-    access = f"state[{json.dumps(key)}]"
-    for part in selector[1:]:
-        access += f"[{json.dumps(str(part))}]"
+    if not from_node:
+        # sys is supplied by the caller for every run, and a missing field is
+        # rejected by name in the prelude (sys_prelude), so index it directly.
+        access = f"state[{json.dumps(key)}]"
+        for part in selector[1:]:
+            access += f"[{json.dumps(str(part))}]"
+        return access
+
+    # A read of another node's output has to tolerate that node not having run.
+    # Branches are the ordinary case: when two branches converge on one End, the
+    # one that was not taken has no entry in state at all, so indexing it raised
+    # `KeyError: '<node>'` -- on the node key, not even the field. Dify resolves an
+    # unavailable selector to None, so mirror that.
+    #
+    # This is not a retreat from failing loudly: that rule is about inputs the
+    # *caller* must supply (workflow inputs, sys, secrets). A value that does not
+    # exist because its branch was skipped is not a missing input. And with output
+    # fields now derived from the DSL (effective_output_fields), a field a node
+    # declares is always present once the node runs -- so None means "that branch
+    # did not run".
+    parts = [str(part) for part in selector[1:]]
+    access = f"state.get({json.dumps(key)}, {{}}).get({json.dumps(parts[0])})"
+    for part in parts[1:]:
+        access = f"({access} or {{}}).get({json.dumps(part)})"
     return access
 
 
@@ -421,7 +662,10 @@ class StartHandler(NodeHandler):
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
         fields: dict[str, str] = {}
         for var in start_variables(node):
-            fields[var["variable"]] = "float" if var.get("type") == "number" else "str"
+            # Dify's full variable vocabulary, not just number-vs-everything: a
+            # `file-list` input is a list, and a real export can omit `type`
+            # entirely (which resolves to Any rather than a guessed str).
+            fields[var["variable"]] = annotation(var.get("type"))
         return fields or {"inputs": "dict[str, Any]"}
 
     def body_prelude(
@@ -544,6 +788,7 @@ class LlmHandler(NodeHandler):
         fields = {
             "text": "str",
             "reasoning_content": "str",
+            "finish_reason": "str",
             "usage": "dict[str, Any]",
         }
         # With structured output enabled, downstream nodes read through it --
@@ -595,7 +840,9 @@ class KnowledgeRetrievalHandler(NodeHandler):
         dataset_ids = node.data.get("dataset_ids") or []
         resolved = resolve_selector(selector, graph, node_name_map)
         if resolved:
-            query = resolved
+            # `or ""`: a node-sourced read yields None when that node did not run
+            # (see resolve_selector), and the Retriever port takes a string.
+            query = f'{resolved} or ""'
         else:
             query = '""'
         call = f"get_retriever().retrieve(query={query}, dataset_ids={dataset_ids!r}"
@@ -629,14 +876,110 @@ class CodeHandler(NodeHandler):
     node_type = "code"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"result": "Any", "stdout": "str", "stderr": "str"}
+        # The DSL declares them (see declared_output_fields). The previous fixed
+        # set was invented: Dify's code node has no `stdout` / `stderr` outputs,
+        # and `result` only exists when the author happened to name it that.
+        return declared_output_fields(node) or {}
 
 
 class ToolHandler(NodeHandler):
     node_type = "tool"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"text": "str", "files": "list[dict[str, Any]]"}
+        # Dify's fixed three. A tool also contributes whatever its own plugin
+        # declares, which the DSL does not carry -- those arrive via the
+        # DSL-reference safety net (effective_output_fields) when something reads
+        # them.
+        return {"text": "str", "files": "list[Any]", "json": "list[dict[str, Any]]"}
+
+
+class HttpRequestHandler(NodeHandler):
+    node_type = "http-request"
+
+    def output_fields(self, node: NodeInfo) -> dict[str, str]:
+        # Dify's HTTP_REQUEST_OUTPUT_STRUCT. `body` is deliberately "" when the
+        # response carried files.
+        return {
+            "body": "str",
+            "status_code": "float",
+            "headers": "dict[str, Any]",
+            "files": "list[Any]",
+        }
+
+
+class DocumentExtractorHandler(NodeHandler):
+    node_type = "document-extractor"
+
+    def output_fields(self, node: NodeInfo) -> dict[str, str]:
+        # One field, whose type depends on whether the input is a single file or a
+        # list of them.
+        is_list = bool(node.data.get("is_array_file"))
+        return {"text": "list[str]" if is_list else "str"}
+
+
+class ListOperatorHandler(NodeHandler):
+    node_type = "list-operator"
+
+    def output_fields(self, node: NodeInfo) -> dict[str, str]:
+        # Types come from the node's own declaration. first_record / last_record are
+        # None on an empty result, which `Any`-or-item-type both tolerate.
+        item = annotation(node.data.get("item_var_type"))
+        return {
+            "result": annotation(node.data.get("var_type")),
+            "first_record": item,
+            "last_record": item,
+        }
+
+
+class ParameterExtractorHandler(NodeHandler):
+    node_type = "parameter-extractor"
+
+    def output_fields(self, node: NodeInfo) -> dict[str, str]:
+        fields: dict[str, str] = {}
+        for parameter in node.data.get("parameters") or []:
+            name = parameter.get("name")
+            if isinstance(name, str) and name.isidentifier():
+                # Dify's legacy spellings for two of the types.
+                declared = {"bool": "boolean", "select": "string"}.get(
+                    parameter.get("type"), parameter.get("type")
+                )
+                fields[name] = annotation(declared)
+        # Dify adds these three alongside the extracted parameters.
+        fields.update({"__is_success": "int", "__reason": "str", "__usage": "dict[str, Any]"})
+        return fields
+
+
+class _NoOutputHandler(NodeHandler):
+    """A Node that exposes nothing downstream can read.
+
+    Without this the fallback declares a single `output` field that does not exist
+    in Dify -- a placeholder nobody can use, in a TypedDict that says they can.
+    """
+
+    def output_fields(self, node: NodeInfo) -> dict[str, str]:
+        return {}
+
+
+class IterationStartHandler(_NoOutputHandler):
+    # A no-op anchor marking the entry of an iteration body (Dify's _run returns
+    # SUCCEEDED with no inputs or outputs).
+    node_type = "iteration-start"
+
+
+class LoopStartHandler(_NoOutputHandler):
+    node_type = "loop-start"
+
+
+class LoopEndHandler(_NoOutputHandler):
+    # Not a structural terminator: reaching it breaks out of the enclosing loop.
+    node_type = "loop-end"
+
+
+class AssignerHandler(_NoOutputHandler):
+    # v2 VariableAssigner. It writes to conversation / system / node variables and
+    # has no readable output of its own. Not to be confused with the legacy
+    # `variable-assigner`, which is the aggregator.
+    node_type = "assigner"
 
 
 class TemplateTransformHandler(NodeHandler):
@@ -662,7 +1005,8 @@ class EndHandler(NodeHandler):
         for output in node.data.get("outputs", []):
             name = output.get("variable", "")
             if name:
-                fields[name] = "Any"
+                # Each declared output carries the type of what it forwards.
+                fields[name] = annotation(output.get("value_type"))
         return fields or {"result": "Any"}
 
     def stub_output(
@@ -690,7 +1034,7 @@ class AnswerHandler(NodeHandler):
     node_type = "answer"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"answer": "str"}
+        return {"answer": "str", "files": "list[Any]"}
 
 
 class AgentHandler(NodeHandler):
@@ -724,18 +1068,27 @@ class _BranchingHandler(NodeHandler):
 
 class QuestionClassifierHandler(_BranchingHandler):
     node_type = "question-classifier"
+    # Dify routes on the class id, and `class_id` is a real output of the node.
     decision_field = "class_id"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"class_name": "str", "class_id": "str"}
+        return {
+            "class_id": "str",
+            "class_name": "str",
+            "class_label": "str",
+            "usage": "dict[str, Any]",
+        }
 
 
 class IfElseHandler(_BranchingHandler):
     node_type = "if-else"
-    decision_field = "selected_branch"
+    # `selected_case_id` is Dify's own name for this output; the generator used to
+    # invent `selected_branch`, which meant anyone implementing the body -- a human
+    # or the opt-in LLM pass -- would compute the right value under the wrong name.
+    decision_field = "selected_case_id"
 
     def output_fields(self, node: NodeInfo) -> dict[str, str]:
-        return {"selected_branch": "str"}
+        return {"result": "bool", "selected_case_id": "str"}
 
 
 _HANDLERS: dict[str, NodeHandler] = {
@@ -745,6 +1098,14 @@ _HANDLERS: dict[str, NodeHandler] = {
         LlmHandler(),
         KnowledgeRetrievalHandler(),
         CodeHandler(),
+        HttpRequestHandler(),
+        DocumentExtractorHandler(),
+        ListOperatorHandler(),
+        ParameterExtractorHandler(),
+        IterationStartHandler(),
+        LoopStartHandler(),
+        LoopEndHandler(),
+        AssignerHandler(),
         ToolHandler(),
         TemplateTransformHandler(),
         VariableAggregatorHandler(),
@@ -764,11 +1125,67 @@ def get_handler(node_type: str) -> NodeHandler:
     return _HANDLERS.get(node_type, _FALLBACK)
 
 
+FAIL_BRANCH_STRATEGY = "fail-branch"
+FAIL_BRANCH_HANDLE = "fail-branch"
+SUCCESS_HANDLE = "source"
+# Dify injects exactly these two on either error strategy, and on the fail path they
+# are the *only* outputs present (engine/event/node_failure.py).
+ERROR_OUTPUT_FIELDS = {"error_message": "str", "error_type": "str"}
+
+
+def uses_fail_branch(node: NodeInfo) -> bool:
+    """Whether the DSL routes this node's failures to a separate branch.
+
+    Args:
+        node: The Node being generated.
+
+    Returns:
+        True when `error_strategy: fail-branch` is set.
+    """
+    return node.data.get("error_strategy") == FAIL_BRANCH_STRATEGY
+
+
 def is_branching(node: NodeInfo) -> bool:
-    """Whether this node routes conditionally (needs add_conditional_edges)."""
-    return get_handler(node.type).is_branching
+    """Whether this node routes conditionally (needs add_conditional_edges).
+
+    Two sources. The handler, for types that branch by nature (question-classifier,
+    if-else). And `error_strategy: fail-branch` on any node: Dify exports a second
+    outgoing edge with `sourceHandle: fail-branch` beside the ordinary `source` one,
+    and promotes the node to a branch. Without this the generator emitted both as
+    unconditional edges, so **the failure path ran even when the node succeeded** --
+    the same bug ADR-0003 exists to prevent, arriving through a different door.
+    """
+    return get_handler(node.type).is_branching or uses_fail_branch(node)
 
 
 def decision_field(node: NodeInfo) -> str | None:
     """The Node Output field whose value selects the branch (None if not branching)."""
     return get_handler(node.type).decision_field
+
+
+def decision_expression(node: NodeInfo, func_name: str) -> str:
+    """The expression a generated router returns to pick a branch.
+
+    Args:
+        node: The branching Node.
+        func_name: The node's canonical state key.
+
+    Returns:
+        Python expression source evaluating to a DSL `sourceHandle`.
+    """
+    handler = get_handler(node.type)
+    if handler.is_branching:
+        access = f'state["{func_name}"]["{handler.decision_field}"]'
+        if node.type == "if-else":
+            # Dify's own routing is `selected_case_id or "false"`: no matching case
+            # means the false branch, and the output is unset rather than "false".
+            return f'{access} or "false"'
+        return access
+    # A fail-branch node has no Dify output naming the branch -- Dify carries it out
+    # of band, as NodeRunResult.edge_source_handle. What it *does* do is inject
+    # error_message only on the failure path, so presence of that is the signal. No
+    # invented field, and a Stub that leaves it unset takes the success branch.
+    return (
+        f'"{FAIL_BRANCH_HANDLE}" if state["{func_name}"].get("error_message")'
+        f' else "{SUCCESS_HANDLE}"'
+    )

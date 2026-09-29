@@ -683,6 +683,44 @@ class TestTerminalNodes:
         assert 'graph.add_edge("node_1731659778623", END)' not in graph
         assert 'graph.add_edge("node_1731659992069", END)' in graph
 
+    def test_a_loop_body_s_leaf_does_not_terminate_the_workflow(self, tmp_path):
+        """`loop_id` was not checked at all, only `iteration_id`.
+
+        A loop body is a sub-graph like an iteration's, so its last step has no
+        outgoing edge in the DSL's flat edge list and looked terminal -- wiring it to
+        END asserts the whole workflow ends when one round of the loop body does.
+        """
+
+        def bury_in_a_loop(dsl: dict) -> None:
+            for node in dsl["workflow"]["graph"]["nodes"]:
+                if node["data"].get("type") == "end":
+                    node["data"]["loop_id"] = "some-loop"
+                    node["data"]["isInLoop"] = True
+
+        fixture = _fixture_variant(tmp_path, "simple_workflow.yml", bury_in_a_loop)
+        translate(fixture, tmp_path / _PKG)
+
+        graph = (tmp_path / _PKG / "graph.py").read_text(encoding="utf-8")
+        assert "END" not in graph
+
+    def test_a_top_level_parentId_is_enough(self, tmp_path):
+        """Dify's own scope resolution prefers `parentId` over the legacy ids.
+
+        It sits at the top level of the DSL node, not under `data`, so the parser has
+        to keep it -- a check against `data["parentId"]` could never fire.
+        """
+
+        def give_it_a_parent(dsl: dict) -> None:
+            for node in dsl["workflow"]["graph"]["nodes"]:
+                if node["data"].get("type") == "end":
+                    node["parentId"] = "some-container"
+
+        fixture = _fixture_variant(tmp_path, "simple_workflow.yml", give_it_a_parent)
+        translate(fixture, tmp_path / _PKG)
+
+        graph = (tmp_path / _PKG / "graph.py").read_text(encoding="utf-8")
+        assert "END" not in graph
+
     def test_a_graph_with_no_terminal_does_not_import_END(self, tmp_path):
         """An unused import is a lint failure in the generated package."""
 
@@ -698,3 +736,213 @@ class TestTerminalNodes:
         assert "END" not in graph
         proc = _run_python(["-m", "ruff", "check", str(tmp_path / _PKG)], tmp_path)
         assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+class TestOutputFieldsComeFromTheDsl:
+    """A node's outputs are whatever the DSL says, not a table we maintain.
+
+    Every case here crashed the generated package before: conversion succeeded and
+    running it raised KeyError, which is the worst shape for a customer.
+    """
+
+    _ERR_FIXTURE = "error_strategy_workflow.yml"
+    _INITIAL = {"node_1790523813130": {"url": "https://example.com"}}
+
+    def test_a_code_node_declares_the_outputs_the_dsl_declares(self, tmp_path):
+        """`outputs: {body_head: {type: string}}` -- not `result`/`stdout`/`stderr`.
+
+        The invented set meant a downstream read of the declared name raised
+        `KeyError: 'body_head'`.
+        """
+        state = _generate_and_run(tmp_path, self._ERR_FIXTURE, self._INITIAL)
+
+        assert state["node_1790523864798"] == {"body_head": "placeholder"}
+
+    def test_an_unhandled_node_type_declares_what_is_read_from_it(self, tmp_path):
+        """`http-request` has no handler, yet the DSL reads four fields from it.
+
+        The fallback declared only `output`, so every one of those reads crashed.
+        The types come from the `value_type` the DSL puts beside each selector.
+        """
+        translate(FIXTURES_DIR / self._ERR_FIXTURE, tmp_path / _PKG)
+
+        state_source = (tmp_path / _PKG / "state.py").read_text(encoding="utf-8")
+        http_block = state_source.split("class Node1790523828855Output")[1].split("class ")[0]
+
+        assert "body: str" in http_block
+        assert "status_code: float" in http_block
+        # Dify injects these two on the error path, and the DSL reads them.
+        assert "error_message: str" in http_block
+        assert "error_type: str" in http_block
+
+    def test_a_declared_field_is_readable_at_run_time(self, tmp_path):
+        """Declaring it in state.py is not enough -- the body has to write it too."""
+        state = _generate_and_run(tmp_path, self._ERR_FIXTURE, self._INITIAL)
+
+        http = state["node_1790523828855"]
+        assert http["body"] == "placeholder"
+        assert http["status_code"] == 0.0
+        # Left unset on purpose: the generated router reads error_message to pick
+        # the branch, and a successful run has no error in Dify either.
+        assert http["error_message"] is None
+
+    def test_a_selector_deeper_than_one_field_resolves(self, tmp_path):
+        """`[node, "headers", "x-request-id"]` needs a nested placeholder.
+
+        A flat one satisfies the first step and raises on the second.
+        """
+
+        def read_a_header(dsl: dict) -> None:
+            for node in dsl["workflow"]["graph"]["nodes"]:
+                if node["data"].get("type") == "end":
+                    node["data"]["outputs"].append({
+                        "value_selector": ["1790523828855", "headers", "x-request-id"],
+                        "value_type": "string",
+                        "variable": "request_id",
+                    })
+                    break
+
+        fixture = _fixture_variant(tmp_path, self._ERR_FIXTURE, read_a_header)
+        state = _generate_and_run(tmp_path, fixture, self._INITIAL)
+
+        assert state["node_1790524186925"]["request_id"] == "placeholder"
+
+    def test_a_node_type_nobody_has_ever_seen_still_runs(self, tmp_path):
+        """The safety net must not depend on knowing Dify's node catalogue.
+
+        Dify adds node types faster than any table can track, so the test uses a
+        type that exists nowhere: the End still reads `body_head` from it, and that
+        reference alone has to be enough to declare the field.
+        """
+
+        def invent_a_type(dsl: dict) -> None:
+            for node in dsl["workflow"]["graph"]["nodes"]:
+                if node["data"].get("type") == "code":
+                    node["data"]["type"] = "some-future-node"
+                    # Not even a declaration to fall back on.
+                    node["data"].pop("outputs", None)
+                    return
+
+        fixture = _fixture_variant(tmp_path, self._ERR_FIXTURE, invent_a_type)
+        state = _generate_and_run(tmp_path, fixture, self._INITIAL)
+
+        # Declared on the unknown node purely because the End reads it, and typed
+        # `str` from that selector's own value_type.
+        assert state["node_1790523864798"]["body_head"] == "placeholder"
+        assert state["node_1790524186925"]["body_head"] == "placeholder"
+
+
+class TestBranchThatDidNotRun:
+    """Two branches converging on one End: the untaken one resolves to None.
+
+    Dify resolves an unavailable selector to None. Indexing it instead raised
+    `KeyError: '<node>'` -- on the node key, before even reaching the field.
+    """
+
+    def test_converging_end_yields_none_for_the_untaken_branch(self, tmp_path):
+        def converge(dsl: dict) -> None:
+            graph = dsl["workflow"]["graph"]
+            ifelse = next(
+                n for n in graph["nodes"] if n["data"].get("type") == "if-else"
+            )
+            ends = [n for n in graph["nodes"] if n["data"].get("type") == "end"]
+            keep, drop = ends[0], ends[1]
+            for branch in ("br_true", "br_false"):
+                graph["nodes"].append({
+                    "id": branch,
+                    "data": {
+                        "type": "template-transform",
+                        "title": branch,
+                        "template": "x",
+                        "variables": [],
+                    },
+                })
+            graph["edges"] = [
+                e
+                for e in graph["edges"]
+                if e["source"] != ifelse["id"] and e["target"] != drop["id"]
+            ]
+            graph["edges"] += [
+                {"source": ifelse["id"], "target": "br_true",
+                 "sourceHandle": "true", "targetHandle": "target"},
+                {"source": ifelse["id"], "target": "br_false",
+                 "sourceHandle": "false", "targetHandle": "target"},
+                {"source": "br_true", "target": keep["id"],
+                 "sourceHandle": "source", "targetHandle": "target"},
+                {"source": "br_false", "target": keep["id"],
+                 "sourceHandle": "source", "targetHandle": "target"},
+            ]
+            graph["nodes"].remove(drop)
+            keep["data"]["outputs"] = [
+                {"variable": "taken", "value_selector": ["br_true", "output"],
+                 "value_type": "string"},
+                {"variable": "skipped", "value_selector": ["br_false", "output"],
+                 "value_type": "string"},
+            ]
+
+        fixture = _fixture_variant(tmp_path, "ifelse_workflow.yml", converge)
+        state = _generate_and_run(tmp_path, fixture, {"start_node": {"query": "x"}})
+
+        # The stub resolves if-else to its first branch key, so br_true runs.
+        assert state["end_true"]["taken"] == "placeholder"
+        assert state["end_true"]["skipped"] is None
+        assert "br_false" not in state
+
+
+class TestFailBranchIsABranch:
+    """`error_strategy: fail-branch` makes a node route, not fan out.
+
+    Dify exports a second outgoing edge with `sourceHandle: fail-branch` beside the
+    ordinary `source` one. Emitting both as unconditional edges meant the failure
+    path ran on a successful run -- the same bug ADR-0003 exists to prevent.
+    """
+
+    _FIXTURE = "error_strategy_workflow.yml"
+    _INITIAL = {"node_1790523813130": {"url": "https://example.com"}}
+
+    def test_only_one_path_runs(self, tmp_path):
+        """The template node is on the failure branch and must stay unvisited."""
+        state = _generate_and_run(tmp_path, self._FIXTURE, self._INITIAL)
+
+        assert "node_1790523864798" in state  # success branch: the code node
+        assert "node_1790524102325" not in state  # failure branch: the template
+
+    def test_the_graph_uses_a_conditional_edge_keyed_by_the_dsl_handles(self, tmp_path):
+        translate(FIXTURES_DIR / self._FIXTURE, tmp_path / _PKG)
+
+        graph = (tmp_path / _PKG / "graph.py").read_text(encoding="utf-8")
+
+        assert 'graph.add_edge("node_1790523828855"' not in graph
+        assert "add_conditional_edges(\"node_1790523828855\"" in graph
+        assert "'source': 'node_1790523864798'" in graph
+        assert "'fail-branch': 'node_1790524102325'" in graph
+
+    def test_the_router_branches_on_dify_s_own_error_output(self, tmp_path):
+        """No invented field: Dify injects error_message only on the failure path.
+
+        It carries the chosen branch out of band (NodeRunResult.edge_source_handle),
+        so there is no Dify output naming it -- but error_message's presence is
+        exactly equivalent, and it is a real Dify output.
+        """
+        translate(FIXTURES_DIR / self._FIXTURE, tmp_path / _PKG)
+
+        graph = (tmp_path / _PKG / "graph.py").read_text(encoding="utf-8")
+
+        assert 'state["node_1790523828855"].get("error_message")' in graph
+        assert '"fail-branch" if' in graph
+
+    def test_the_stub_takes_the_success_path(self, tmp_path):
+        """A stubbed graph resolves to exactly one successor, as elsewhere.
+
+        The placeholder for a `str` field is "placeholder", which is truthy -- so
+        leaving error_message at its default would have sent every run down the
+        failure branch.
+        """
+        translate(FIXTURES_DIR / self._FIXTURE, tmp_path / _PKG)
+
+        body = (tmp_path / _PKG / "nodes" / "node_1790523828855.py").read_text(
+            encoding="utf-8"
+        )
+
+        assert '"error_message": None' in body
+        assert '"error_message": "placeholder"' not in body

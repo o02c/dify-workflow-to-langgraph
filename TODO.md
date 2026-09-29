@@ -25,8 +25,8 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   scripts/verify-gitbash.sh --expected-digest <上の digest>
   ```
 
-  > `sys.*` / `env.*` の実装で**生成物が変わったため digest も変わっている**。古い
-  > `3ca50a8c...` ではなく、その時点の `make verify-digest` の値を使うこと。
+  > **生成物が何度も変わっているので digest も変わっている。** 過去ログの値
+  > （`3ca50a8c...` など）は使えない。必ずその時点の `make verify-digest` の値を使う。
 
   LLM 経路まで見る場合は `-WithLlm` / `--with-llm` を追加（実際に課金される）。
   Docker は対象外（下記「Windows での Docker 検証は「やらない」と決めた」を参照）。
@@ -53,7 +53,8 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [~] 変数参照の正準化（ADR-0004）— value_selector と `{{#id.field#}}` の両構文 → `state["node_<id>"]["field"]`
   - [x] 正準キー化（`sanitize_function_name` を leaf `dify2langgraph/naming.py` に集約し parser が共有、数値 ID バグ修正）
   - [x] End ノードは value_selector を正規化アクセスに変換した決定論的本体を生成
-  - [ ] `{{#context#}}` 解決、`sys.*` / `env.*` の住所実装、End 以外の本体への入力配線（LLM オプトイン後処理と併走・ADR-0001）
+  - [x] `sys.*` / `env.*` の実装（下の Deferred 節に詳細）
+  - [ ] `{{#context#}}` 解決、End 以外の本体への入力配線（LLM オプトイン後処理と併走・ADR-0001）
 - [x] 生成物を自己完結パッケージ化（相対 import、`__init__`/`__main__`、`sys.path` ハック廃止、ADR-0007）
 - [x] RAG: `Retriever` ポート + `DifyApiRetriever` 既定アダプタ（ADR-0006）
   - `templates/retriever.py`（依存フリー・urllib）を生成物にバンドル、knowledge-retrieval ノードが `get_retriever().retrieve(...)` を呼ぶ実本体を生成。未設定時は `[]` を返し資格情報なしでも走る
@@ -158,7 +159,35 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 
 ## Deferred（要調査 / 後続）
 
-- [ ] iteration（ループ）— ループ全体が 1 ノードで内部にサブグラフを持つ表現。実 DSL 調査後に Handler 形状を決定（ADR-0005 参照）
+- [ ] **`iteration`（配列を map）** — `iterator_selector`（入力配列）/ `output_selector`
+  （各周で集める変数）/ `is_parallel` / `parallel_nums`（既定 10、`is_parallel` が false なら
+  1 に強制）/ `flatten_output`（既定 true。全周の出力が list のときだけ平坦化）/
+  `error_handle_mode` = `terminated` | `continue-on-error` | `remove-abnormal-output`。
+  出力は `output` 1 つ。本体内で `[iteration_id, "item"]` / `[iteration_id, "index"]` が読める。
+  実装時には**パーサが `iterator_selector` / `output_selector` を収集する必要がある**
+  （現状これが唯一の参照収集漏れ。他の全ノード種別は網羅を検証済み）
+- [ ] **`loop`（条件付き繰り返し）— `iteration` とは別のノード種別** `loop_count`（最大周回、
+  既定 10）/ `break_conditions` + `logical_operator`（`and`/`or`。比較演算子に非 ASCII の
+  `≥ ≤ ≠` が実 DSL に現れる）/ `loop_variables`（`label` が変数名の可変ループ状態）。
+  **`output` を持たない** — `loop_variables[].label` の最終値 + `loop_round`(number)。
+  本体内では `[loop_id, <label>]` を読み書きする。`loop` の `error_handle_mode` は
+  UI が書くが graphon は読んでいないので無視してよい。
+  マーカー `loop-end` は構造上の終端ではなく break（内側の Loop End は外側を break できない）。
+  `iteration-end` は存在しない
+- [ ] **ノードのエラー処理の意味論** — グラフ構造（fail-branch が全分岐を発火させる問題）は
+  修正済み（ADR-0003 の amendment）。残りは以下。
+  - `retry_config` = `{max_retries, retry_interval, retry_enabled}`。**`retry_interval` の
+    単位はミリ秒**。総試行回数は `1 + max_retries`。リトライを使い切ってから初めて
+    ストラテジが適用される。UI の範囲は max 1–10 / interval 100–5000ms（既定 3 / 1000）で
+    バックエンド検証は無い。リトライ対応は llm / code / http-request / tool の 4 種のみ
+  - `default_value` = `[{key, type, value}]`。キー集合はノード種別ごとに UI が決める
+    （llm→`text` / http-request→`body`+`status_code`+`headers` / tool→`text`+`json` /
+    code→`data.outputs` のキー / その他→空）
+  - **未検証の罠**: dify の fixture 2 件に `retry_config.enabled` と
+    `retry_config.exponential_backoff` という別形状がある。graphon に消費側が無く
+    pydantic に落とされる。実装時は `retry_enabled` を正とし、防御的に `enabled` も受ける
+  - `agent-v2` は出力ごとの別スキーマを持つ（`on_failure` / `retry_interval_ms` /
+    `fail_branch`・`default_value` とアンダースコア表記）。ノード単位のものとは非互換
 - [x] **`sys.*` の実装** — 参照されているフィールドだけを `SysInputs` として宣言し、
   `GraphState` に `sys` を追加。呼び出し側が invoke 時に渡す（ADR-0009 と同じ扱い）。
   selector 形式とテンプレート形式の両方が解決される。sys の構成はモード依存
@@ -179,7 +208,23 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
 - [~] Retriever に検索設定を転送（ADR-0006、実 Dify 1.16.1 で検証）
   - [x] `/retrieve` は完全な `retrieval_model`（search_method / reranking_enable / top_k / score_threshold_enabled）が必須 → adapter が補完。`search_method` は DSL に無いため env `DIFY_RETRIEVAL_SEARCH_METHOD`（既定 semantic_search）で制御。handler が `multiple_retrieval_config` の top_k / score_threshold を投影
   - [ ] reranking（`reranking_model` / provider）の転送、`single` モード（LLM 選択）対応
-- [ ] 他ノードタイプ: parameter-extractor / http-request / variable-assigner / template-transform / tool / agent / code
+  - [ ] metadata フィルタの転送 — Dify 側に `metadata_filtering_mode`
+    （`disabled`/`automatic`/`manual`）/ `metadata_filtering_conditions` /
+    `metadata_model_config` が実在するが未対応
+- [x] **ノード種別ごとの出力を Dify の正典に合わせた**（登録 12 → 20）。Dify 本体
+  （langgenius/dify + graphon 0.7.0）の実装から出力を取って全ハンドラを突き合わせ、
+  `http-request`（未登録だった）/ `parameter-extractor` / `document-extractor` /
+  `list-operator` / `assigner` / `iteration-start` / `loop-start` / `loop-end` を追加。
+  `if-else` の `selected_branch` は発明した名前だったので Dify の `selected_case_id` に。
+  `code` は DSL の `data.outputs` を読む（`result`/`stdout`/`stderr` は架空だった）
+- [ ] 残るノード種別の**動的な**出力
+  - `tool` / `agent` — プラグインの `output_schema` 由来で DSL には無い。下流が読んでいれば
+    安全網（`effective_output_fields`）が宣言するので実行は通る
+  - `code` の `outputs[*].children`（入れ子 object スキーマ）。現状 `type` だけを見ている
+  - `variable-aggregator` のグループ形式（`[node, group_name, "output"]` の 3 段）
+  - `agent-v2` の `agent_declared_outputs` / `switch`（`agent_output_routes.enabled` 依存）
+- [ ] 対象外と判断: `datasource` / `datasource-empty` / `knowledge-index`（RAG パイプライン）、
+  `trigger-schedule` / `trigger-webhook` / `trigger-plugin`（トリガー系ワークフロー）
 - [ ] CLI: `--dry-run`, `--single-file`（`--format`）
 - [ ] 生成コードの使い方ガイド / ノードタイプ別実装例
 

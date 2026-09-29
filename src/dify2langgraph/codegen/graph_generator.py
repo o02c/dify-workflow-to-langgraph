@@ -5,7 +5,7 @@ This module generates the graph.py file with StateGraph construction.
 
 from pathlib import Path
 
-from dify2langgraph.codegen.handlers import decision_field, is_branching
+from dify2langgraph.codegen.handlers import decision_expression, is_branching
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.codegen.routing import branch_map
 from dify2langgraph.logging_config import get_logger
@@ -35,16 +35,31 @@ def format_from_import(module: str, names: list[str]) -> list[str]:
     return [f"from {module} import (", *(f"    {name}," for name in names), ")"]
 
 
-def _is_inside_iteration(node: NodeInfo) -> bool:
-    """Whether a node belongs to an iteration's body rather than the main flow.
+def _is_inside_container(node: NodeInfo) -> bool:
+    """Whether a node belongs to a container's body rather than the main flow.
+
+    Containers are `iteration` (map over an array) and `loop` (repeat until a
+    condition). Their bodies are sub-graphs, so a body node is not part of the main
+    flow even when the DSL's flat edge list makes its last step look terminal.
+
+    The checks follow the order Dify itself resolves ownership in
+    (`graph/scoping.py::resolve_container_id`): the newer canonical `container_id`,
+    then the React Flow `parentId`, then the legacy `iteration_id` / `loop_id`.
+    `isInIteration` / `isInLoop` come last -- Dify does not use them for scoping at
+    all, they are flags the editor derives -- and `loop_id` was not checked here
+    before, so a loop body's last step was wired straight to END.
 
     Args:
         node: The parsed node.
 
     Returns:
-        True when the DSL marks it as nested inside an iteration.
+        True when the DSL places it inside an iteration or a loop.
     """
-    return bool(node.data.get("isInIteration") or node.data.get("iteration_id"))
+    if node.parent_id or node.data.get("container_id"):
+        return True
+    if node.data.get("iteration_id") or node.data.get("loop_id"):
+        return True
+    return bool(node.data.get("isInIteration") or node.data.get("isInLoop"))
 
 
 def terminal_node_ids(graph: WorkflowGraph) -> list[str]:
@@ -71,7 +86,7 @@ def terminal_node_ids(graph: WorkflowGraph) -> list[str]:
     return [
         node_id
         for node_id, node in graph.nodes.items()
-        if node_id not in with_outgoing and not _is_inside_iteration(node)
+        if node_id not in with_outgoing and not _is_inside_container(node)
     ]
 
 
@@ -114,13 +129,12 @@ def generate_graph_file(
     branching_nodes = [n for n in graph.nodes.values() if is_branching(n)]
     for node in branching_nodes:
         func_name, _ = get_node_names(node.id, node_name_map)
-        field = decision_field(node)
         lines.extend([
             "",
             "",
             f"def route_{func_name}(state: GraphState) -> str:",
             f'    """Route for branching node: {node.title} ({node.type})."""',
-            f'    return state["{func_name}"]["{field}"]',
+            f"    return {decision_expression(node, func_name)}",
         ])
 
     lines.extend([

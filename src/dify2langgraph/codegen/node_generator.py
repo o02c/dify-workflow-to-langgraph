@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 
 from dify2langgraph.codegen.handlers import (
+    effective_output_fields,
+    effective_stub_output,
     get_handler,
     reference_access,
     referenced_sys_fields_for,
@@ -66,7 +68,9 @@ def _generate_node_file(
 
     # Prepare node metadata for agent
     handler = get_handler(node.type)
-    output_fields = handler.output_fields(node)
+    # The handler's declaration plus whatever the DSL reads that it missed;
+    # state.py is generated from the same function so the two cannot drift.
+    output_fields = effective_output_fields(node, graph)
     node_config = {
         "id": node.id,
         "state_key": func_name,  # LLM-generated name used as state key
@@ -105,7 +109,7 @@ def _generate_node_file(
     # env constant decides whether the module has to be imported, and an import
     # the Stub never uses is a lint failure in the generated package.
     body_prelude = handler.body_prelude(node, graph, node_name_map)
-    body_output = handler.stub_output(node, graph, node_name_map)
+    body_output = effective_stub_output(node, graph, node_name_map)
 
     # Guard the caller-supplied sys.* this body reads, for the same reason the
     # Start Node guards its workflow inputs. Only for a deterministic body: a Stub

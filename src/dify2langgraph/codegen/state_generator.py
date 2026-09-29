@@ -5,7 +5,7 @@ This module generates the state.py file with GraphState TypedDict definitions.
 
 from pathlib import Path
 
-from dify2langgraph.codegen.handlers import get_handler, referenced_sys_fields
+from dify2langgraph.codegen.handlers import effective_output_fields, referenced_sys_fields
 from dify2langgraph.codegen.naming import get_node_names
 from dify2langgraph.logging_config import get_logger
 from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
@@ -13,19 +13,24 @@ from dify2langgraph.parser.dsl_parser import NodeInfo, WorkflowGraph
 logger = get_logger(__name__)
 
 
-def get_node_output_fields(node: NodeInfo) -> dict[str, str]:
+def get_node_output_fields(node: NodeInfo, graph: WorkflowGraph) -> dict[str, str]:
     """Infer output fields for a node based on its type and configuration.
 
-    Delegates to the node's :class:`~dify2langgraph.codegen.handlers.NodeHandler`;
-    unknown types get a generic ``{"output": "Any"}`` from the fallback.
+    Delegates to :func:`~dify2langgraph.codegen.handlers.effective_output_fields`,
+    which is the node's handler plus whatever the DSL reads from the node that the
+    handler did not declare. The graph is needed for that second half: an unknown
+    Node type would otherwise declare only the fallback's ``output``, and a
+    downstream selector reading its real output would raise ``KeyError`` at run
+    time.
 
     Args:
         node: NodeInfo instance.
+        graph: The parsed workflow, for what other nodes read from this one.
 
     Returns:
         Dictionary mapping field names to their types.
     """
-    return get_handler(node.type).output_fields(node)
+    return effective_output_fields(node, graph)
 
 
 def generate_state_file(
@@ -55,7 +60,7 @@ def generate_state_file(
     for node_id in graph.nodes:
         node = graph.nodes[node_id]
         func_name, class_name = get_node_names(node_id, node_name_map)
-        fields = get_node_output_fields(node)
+        fields = get_node_output_fields(node, graph)
 
         lines.extend([
             f"class {class_name}(TypedDict, total=False):",
