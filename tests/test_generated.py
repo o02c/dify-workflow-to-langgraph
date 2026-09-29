@@ -946,3 +946,81 @@ class TestFailBranchIsABranch:
 
         assert '"error_message": None' in body
         assert '"error_message": "placeholder"' not in body
+
+
+class TestRenamedNodeKeys:
+    """`--name-nodes` replaces `node_<dify id>` with readable names.
+
+    The names themselves come from an LLM, but everything downstream of that is
+    deterministic: a `node_id -> (snake_case, CamelCase)` map is handed to
+    `translate`. So the map is supplied directly here -- no model call, and the whole
+    substitution path gets covered, which it was not at all before.
+
+    That path runs through every generator: state keys and TypedDict class names,
+    node file names and function names, the router name and the conditional-edge
+    targets, and every resolved reference between nodes.
+    """
+
+    _NAMES = {
+        "1790523813130": ("user_input", "UserInput"),
+        "1790523828855": ("http_request", "HttpRequest"),
+        "1790523864798": ("execute_code", "ExecuteCode"),
+        "1790524102325": ("apply_template", "ApplyTemplate"),
+        "1790524186925": ("generate_output", "GenerateOutput"),
+    }
+
+    def _translate(self, tmp_path: Path) -> Path:
+        translate(
+            FIXTURES_DIR / "error_strategy_workflow.yml",
+            tmp_path / _PKG,
+            node_name_map=self._NAMES,
+        )
+        return tmp_path / _PKG
+
+    def test_every_generated_name_uses_the_map(self, tmp_path):
+        pkg = self._translate(tmp_path)
+
+        node_files = {p.stem for p in (pkg / "nodes").glob("*.py")} - {"__init__"}
+        assert node_files == {
+            "user_input", "http_request", "execute_code",
+            "apply_template", "generate_output",
+        }
+
+        state = (pkg / "state.py").read_text(encoding="utf-8")
+        assert "class HttpRequestOutput(TypedDict" in state
+        assert "http_request: HttpRequestOutput" in state
+        # No numeric fallback key survives anywhere.
+        assert "node_1790523828855" not in state
+
+    def test_routing_and_references_follow_the_map(self, tmp_path):
+        pkg = self._translate(tmp_path)
+
+        graph = (pkg / "graph.py").read_text(encoding="utf-8")
+        assert "def route_http_request(state: GraphState) -> str:" in graph
+        assert "'source': 'execute_code'" in graph
+        assert "'fail-branch': 'apply_template'" in graph
+
+        end_body = (pkg / "nodes" / "generate_output.py").read_text(encoding="utf-8")
+        assert 'state.get("execute_code", {}).get("body_head")' in end_body
+        assert "Dependencies: apply_template, execute_code" in end_body
+        # The raw Dify id survives only where it is the DSL's own text: the
+        # embedded NODE_CONFIG block, and the `raw` side of a reference comment.
+        after_config = end_body.split("'''")[-1]
+        assert "1790523864798" not in after_config.replace(
+            "# 1790523864798.body_head", ""
+        )
+
+    def test_the_renamed_package_runs(self, tmp_path):
+        """The names reach the caller too: the input key is the renamed one."""
+        self._translate(tmp_path)
+
+        snippet = _RUN_SNIPPET.format(
+            initial=repr({"user_input": {"url": "https://example.com"}})
+        )
+        proc = _run_python(["-c", snippet], tmp_path)
+
+        assert proc.returncode == 0, proc.stderr
+        state = json.loads(proc.stdout.strip().splitlines()[-1])
+        assert state["execute_code"]["body_head"] == "placeholder"
+        # Still exactly one branch, with the renamed targets.
+        assert "apply_template" not in state

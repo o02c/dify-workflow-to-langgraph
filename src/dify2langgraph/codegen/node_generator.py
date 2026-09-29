@@ -152,10 +152,17 @@ def _generate_node_file(
         f"    Type: {node.type}",
     ]
 
-    # Add dependency info to docstring
+    # Add dependency info to docstring, named the way the rest of the file names
+    # them. The raw Dify id appears nowhere else in the generated code, so listing it
+    # here left the reader to map it back by hand -- and defeated --name-nodes, whose
+    # whole point is readable names. `sys` / `env` pass through: they are namespaces,
+    # not nodes.
     if node.dependencies:
-        deps = ", ".join(sorted(node.dependencies))
-        lines.append(f"    Dependencies: {deps}")
+        deps = sorted(
+            get_node_names(dep, node_name_map)[0] if dep in graph.nodes else dep
+            for dep in node.dependencies
+        )
+        lines.append(f"    Dependencies: {', '.join(deps)}")
 
     lines.extend([
         "",
