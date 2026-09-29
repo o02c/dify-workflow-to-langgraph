@@ -16,6 +16,7 @@ from dify2langgraph.codegen import (
     generate_state_file,
 )
 from dify2langgraph.logging_config import get_logger
+from dify2langgraph.naming import usable_node_names
 from dify2langgraph.parser import DifyDSLParser
 
 logger = get_logger(__name__)
@@ -270,11 +271,23 @@ def main() -> int:
                 for n in graph.nodes.values()
             ]
             node_names = engine.generate_node_names(nodes_info)
-            node_name_map = {
-                n.node_id: (n.snake_case, n.camel_case)
-                for n in node_names
-            }
-            logger.info("Generated %d node names", len(node_name_map))
+            # Validated, not trusted: these come from a model, and an unusable name
+            # produced a syntactically broken package rather than an ugly one.
+            node_name_map = usable_node_names(
+                {n.node_id: (n.snake_case, n.camel_case) for n in node_names},
+                set(graph.nodes),
+            )
+            if not node_name_map:
+                logger.warning(
+                    "--name-nodes produced no usable names, so nodes keep their "
+                    "node_<id> names. Re-run, or drop the flag to skip this step."
+                )
+            else:
+                logger.info(
+                    "Named %d of %d nodes; the rest keep their node_<id> names.",
+                    len(node_name_map),
+                    len(graph.nodes),
+                )
 
         translate(args.input, output_dir, node_name_map)
 

@@ -222,8 +222,15 @@ class CodeGenerationEngine:
 
         try:
             names_data = json.loads(response)
-        except json.JSONDecodeError:
-            # Fallback: return empty list
+        except json.JSONDecodeError as exc:
+            # Said out loud: returning [] in silence left the caller with no names and
+            # no reason, which reads as "--name-nodes did nothing".
+            logger.warning(
+                "Could not read the model's node names as JSON (%s). The first 200 "
+                "characters were: %r",
+                exc,
+                response[:200],
+            )
             return []
 
         # Build NodeName objects

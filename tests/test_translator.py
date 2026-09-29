@@ -1,6 +1,7 @@
 """Tests for the translator module."""
 
 import ast
+import logging
 import subprocess
 import tempfile
 from pathlib import Path
@@ -12,6 +13,7 @@ from dify2langgraph.codegen import (
     generate_state_file,
     sanitize_function_name,
 )
+from dify2langgraph.naming import usable_node_names
 from dify2langgraph.parser import DifyDSLParser
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -789,3 +791,63 @@ class TestGuidanceMatchesGeneratedCode:
 
             assert '# sys.app_id -> state["sys"]["app_id"]' in body
             assert '"app_id": state["sys"]["app_id"],' in body
+
+
+class TestGeneratedNodeNamesAreValidated:
+    """`--name-nodes` names come from a model, so they cannot be trusted as-is.
+
+    An unusable name was not a cosmetic problem. An empty `snake_case` produced a node
+    file called literally `.py`, a `graph.add_node("", )` line and an `__init__.py`
+    that does not parse -- the whole package broken, with nothing said at conversion
+    time. Rejected names fall back to the canonical `node_<id>`, so the run still
+    produces something that works.
+    """
+
+    def test_unusable_names_are_dropped_with_a_reason(self, caplog):
+        known = {"n1", "n2", "n3", "n4"}
+        raw = {
+            "n1": ("", ""),                    # model omitted the field
+            "n2": ("class", "Class"),          # a Python keyword
+            "n3": ("has space", "HasSpace"),   # not an identifier
+            "n4": ("good_name", "GoodName"),
+            "not_a_node": ("x", "X"),
+        }
+
+        with caplog.at_level(logging.WARNING):
+            usable = usable_node_names(raw, known)
+
+        assert usable == {"n4": ("good_name", "GoodName")}
+        for node_id in ("n1", "n2", "n3", "not_a_node"):
+            assert node_id in caplog.text
+
+    def test_a_malformed_entry_is_dropped(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            usable = usable_node_names({"n1": ("only_one",)}, {"n1"})  # type: ignore[dict-item]
+
+        assert usable == {}
+        assert "malformed" in caplog.text
+
+    def test_without_known_ids_every_well_formed_name_is_kept(self):
+        """The node id set is optional; callers that lack it still get validation."""
+        assert usable_node_names({"n1": ("a", "A")}) == {"n1": ("a", "A")}
+
+    def test_a_package_built_from_unusable_names_still_parses(self):
+        """The end state that matters: no `.py` file, no `add_node("", )`."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            translate(
+                FIXTURES_DIR / "error_strategy_workflow.yml",
+                output_dir,
+                node_name_map=usable_node_names(
+                    {"1790523828855": ("", ""), "1790523813130": ("user_input", "UserInput")},
+                    None,
+                ),
+            )
+
+            names = {p.name for p in (output_dir / "nodes").glob("*.py")}
+            assert ".py" not in names
+            assert "user_input.py" in names
+            assert "node_1790523828855.py" in names
+
+            for path in [*(output_dir / "nodes").glob("*.py"), output_dir / "graph.py"]:
+                ast.parse(path.read_text(encoding="utf-8"))  # raises if broken
