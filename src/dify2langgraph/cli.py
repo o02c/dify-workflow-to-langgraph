@@ -77,7 +77,8 @@ def copy_templates(output_dir: Path) -> None:
         dest = output_dir / template_file.name
         # Re-write rather than shutil.copy: a byte copy would carry CRLF into the
         # output if the checkout has it (Git for Windows does this by default),
-        # and the generated package must be byte-identical everywhere (ADR-0001).
+        # and the generated package must be byte-identical everywhere: the same
+        # input has to produce the same bytes on any operating system.
         # .gitattributes also pins these to LF; this makes the output correct even
         # when the templates arrive from somewhere else.
         dest.write_text(

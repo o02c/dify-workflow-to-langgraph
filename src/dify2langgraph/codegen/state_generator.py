@@ -73,7 +73,7 @@ def generate_state_file(
 
         lines.extend(["", ""])
 
-    # Dify's workflow-level runtime inputs get a reserved `sys` key (ADR-0004).
+    # Dify's workflow-level runtime inputs get a reserved `sys` key.
     # Only the fields the DSL actually reads are declared: which ones exist is
     # mode-dependent (sys.query is chatflow-only), so a fixed catalogue would be
     # wrong for one mode or the other.
@@ -112,6 +112,6 @@ def generate_state_file(
     # newline="\n" pins LF on every platform. Left to the default, Python's text
     # mode rewrites "\n" to os.linesep, so a native Windows run would emit CRLF
     # while the container (Linux) emits LF -- the same DSL would produce
-    # byte-different output depending on how the converter was run (ADR-0001).
+    # byte-different output depending on how the converter was run.
     output_path.write_text(content, encoding="utf-8", newline="\n")
     logger.info("Generated: %s", output_path)

@@ -789,3 +789,75 @@ class TestGuidanceMatchesGeneratedCode:
 
             assert '# sys.app_id -> state["sys"]["app_id"]' in body
             assert '"app_id": state["sys"]["app_id"],' in body
+
+
+class TestNoPointersOutsideWhatIsShipped:
+    """Generated code and shipped source must not cite documents nobody receives.
+
+    The decision records live outside the distributed tree, so a `(ADR-0004)` in a
+    generated comment is a dead end for the customer holding that file -- and the
+    comments in generated node bodies are the only instructions they get. `src/` is
+    shipped too (the release archive carries it), so the same applies there.
+    """
+
+    def test_generated_packages_cite_no_internal_documents(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            for fixture in sorted(FIXTURES_DIR.glob("*.yml")):
+                translate(fixture, output_dir / fixture.stem)
+
+            offenders = [
+                f"{path.relative_to(output_dir)}:{n}: {line.strip()}"
+                for path in output_dir.rglob("*.py")
+                for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+                if "ADR-" in line
+            ]
+
+            assert not offenders, "generated output cites internal documents:\n" + "\n".join(
+                offenders
+            )
+
+    # Everything scripts/build-release.sh copies into the distributed tree. Listed
+    # explicitly rather than globbed: two citations survived a first pass because the
+    # check only looked at src/*.py, and Dockerfile and pyproject.toml ship too.
+    _SHIPPED = (
+        "src/dify2langgraph",
+        "pyproject.toml",
+        "Dockerfile",
+        ".dockerignore",
+        "compose.yaml",
+        "USAGE.md",
+    )
+
+    def test_everything_shipped_cites_no_internal_documents(self):
+        repo_root = Path(__file__).parent.parent
+
+        offenders = []
+        for target in self._SHIPPED:
+            path = repo_root / target
+            assert path.exists(), f"{target} is listed as shipped but does not exist"
+            files = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
+            for file in files:
+                # The same exclusions scripts/build-release.sh applies after copying,
+                # so this checks exactly the set that ships.
+                if "__pycache__" in file.parts:
+                    continue
+                if file.suffix == ".pyc" or file.name == ".DS_Store":
+                    continue
+                for n, line in enumerate(
+                    file.read_text(encoding="utf-8").splitlines(), 1
+                ):
+                    if "ADR-" in line or "docs/adr" in line:
+                        offenders.append(f"{file.relative_to(repo_root)}:{n}: {line.strip()}")
+
+        assert not offenders, "shipped files cite internal documents:\n" + "\n".join(
+            offenders
+        )
+
+    def test_the_shipped_readme_section_cites_no_internal_documents(self):
+        """Only the part before the developer section is distributed."""
+        readme = (Path(__file__).parent.parent / "README.md").read_text(encoding="utf-8")
+        shipped = readme.split("## 開発者向け")[0]
+
+        assert "ADR-" not in shipped
+        assert "docs/adr" not in shipped
