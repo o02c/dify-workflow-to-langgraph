@@ -717,8 +717,11 @@ class TestGeneratedOutputIsByteStableAcrossPlatforms:
             output_dir = Path(tmpdir)
             translate(FIXTURES_DIR / "guardduty_handler.yml", output_dir)
 
-            generated = sorted(output_dir.rglob("*.py"))
+            # Every generated file, not only the .py ones: requirements.txt and the
+            # Dockerfile are written the same way and would churn the same way.
+            generated = sorted(p for p in output_dir.rglob("*") if p.is_file())
             assert generated, "fixture produced no files"
+            assert any(p.name == "Dockerfile" for p in generated)
 
             crlf = [p.name for p in generated if b"\r\n" in p.read_bytes()]
             assert not crlf, f"CRLF line endings in: {crlf}"

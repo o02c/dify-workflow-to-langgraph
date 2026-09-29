@@ -946,3 +946,71 @@ class TestFailBranchIsABranch:
 
         assert '"error_message": None' in body
         assert '"error_message": "placeholder"' not in body
+
+
+class TestTheGeneratedPackageSaysHowToRunIt:
+    """A generated package needs three third-party packages, and used to say so nowhere.
+
+    On a clean machine `python -m <pkg>` failed with
+    `ModuleNotFoundError: No module named 'langgraph'`, and neither the output nor the
+    guide mentioned what to install.
+    """
+
+    def test_requirements_lists_what_is_imported_at_module_level(self, tmp_path):
+        translate(FIXTURES_DIR / "simple_workflow.yml", tmp_path / _PKG)
+
+        requirements = (tmp_path / _PKG / "requirements.txt").read_text(encoding="utf-8")
+        named = {
+            line.strip()
+            for line in requirements.splitlines()
+            if line.strip() and not line.startswith("#")
+        }
+
+        assert named == {"langgraph", "langchain-core", "python-dotenv"}
+
+    def test_provider_packages_are_offered_but_not_required(self, tmp_path):
+        """Each is imported inside the function that needs it, so one is enough.
+
+        Requiring all four to run a workflow that calls one model would be absurd, and
+        requiring none leaves a workflow with an LLM node undocumented.
+        """
+        translate(FIXTURES_DIR / "simple_workflow.yml", tmp_path / _PKG)
+
+        requirements = (tmp_path / _PKG / "requirements.txt").read_text(encoding="utf-8")
+
+        for package in (
+            "langchain-openai",
+            "langchain-anthropic",
+            "langchain-google-genai",
+            "langchain-aws",
+        ):
+            assert f"# {package}" in requirements, package
+
+    def test_a_workflow_with_no_model_node_offers_no_provider(self, tmp_path):
+        """`ifelse_workflow` has no llm node, so the provider block is noise there."""
+        translate(FIXTURES_DIR / "ifelse_workflow.yml", tmp_path / _PKG)
+
+        requirements = (tmp_path / _PKG / "requirements.txt").read_text(encoding="utf-8")
+
+        assert "langchain-openai" not in requirements
+        assert "langgraph" in requirements
+
+    def test_the_dockerfile_runs_the_package_by_name(self, tmp_path):
+        """The package is imported from its parent, so WORKDIR cannot be the package."""
+        translate(FIXTURES_DIR / "simple_workflow.yml", tmp_path / _PKG)
+
+        dockerfile = (tmp_path / _PKG / "Dockerfile").read_text(encoding="utf-8")
+
+        assert "WORKDIR /app" in dockerfile
+        assert f"COPY . /app/{_PKG}/" in dockerfile
+        assert f'CMD ["python", "-m", "{_PKG}"]' in dockerfile
+        # Dependencies before the sources, so editing a node body does not reinstall.
+        assert dockerfile.index("requirements.txt") < dockerfile.index(f"COPY . /app/{_PKG}/")
+
+    def test_the_dockerfile_names_the_package_it_was_generated_for(self, tmp_path):
+        """A stale name would build an image that cannot import anything."""
+        translate(FIXTURES_DIR / "simple_workflow.yml", tmp_path / "other_name")
+
+        dockerfile = (tmp_path / "other_name" / "Dockerfile").read_text(encoding="utf-8")
+
+        assert 'CMD ["python", "-m", "other_name"]' in dockerfile

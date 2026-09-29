@@ -9,10 +9,12 @@ import sys
 from pathlib import Path
 
 from dify2langgraph.codegen import (
+    generate_dockerfile,
     generate_env_file,
     generate_graph_file,
     generate_nodes_directory,
     generate_package_files,
+    generate_requirements_file,
     generate_state_file,
 )
 from dify2langgraph.logging_config import get_logger
@@ -53,6 +55,10 @@ def translate(
     generate_graph_file(graph, output_dir, node_name_map)
     generate_package_files(graph, output_dir, node_name_map)
     generate_env_file(graph, output_dir)
+    # What the package needs to run: the dependency list, and a Dockerfile for a
+    # recipient who would rather not touch their own Python installation.
+    generate_requirements_file(graph, output_dir)
+    generate_dockerfile(output_dir.name, output_dir)
 
     # Copy template files
     copy_templates(output_dir)

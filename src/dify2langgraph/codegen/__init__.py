@@ -12,13 +12,19 @@ from dify2langgraph.codegen.naming import (
 )
 from dify2langgraph.codegen.node_generator import generate_nodes_directory
 from dify2langgraph.codegen.package_generator import generate_package_files
+from dify2langgraph.codegen.runtime_generator import (
+    generate_dockerfile,
+    generate_requirements_file,
+)
 from dify2langgraph.codegen.state_generator import (
     generate_state_file,
     get_node_output_fields,
 )
 
 __all__ = [
+    "generate_dockerfile",
     "generate_env_file",
+    "generate_requirements_file",
     "get_node_names",
     "sanitize_class_name",
     "sanitize_function_name",
