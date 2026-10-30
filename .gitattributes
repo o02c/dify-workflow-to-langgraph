@@ -8,7 +8,7 @@ scripts/verify-gitbash.sh export-subst
 # Git for Windows defaults to core.autocrlf=true, which would give a clone CRLF
 # working-tree copies of templates/*.py. Those are copied verbatim into the
 # generated package, so the output would stop being byte-identical across
-# platforms (ADR-0001) even though every generator pins newline="\n".
+# platforms even though every generator pins newline="\n".
 *.py text eol=lf
 
 # A shell script with CRLF is not merely untidy -- the shebang becomes

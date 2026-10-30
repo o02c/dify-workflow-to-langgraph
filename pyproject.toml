@@ -77,7 +77,7 @@ package = true
 # `make lock`. uv takes a fixed timestamp, so `make lock` rolls it forward via
 # scripts/refresh-quarantine.py before re-resolving.
 # The Docker build uses `uv sync --frozen` and resolves nothing, so it simply
-# replays whatever this produced (ADR-0008).
+# replays whatever this produced.
 exclude-newer = "2026-09-14T12:29:33Z"
 
 [tool.hatch.build.targets.wheel]

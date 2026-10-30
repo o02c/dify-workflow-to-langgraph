@@ -147,8 +147,14 @@ Roadmap after the 2026-08 redesign. Decisions: see [docs/adr/](./docs/adr/); ter
   `uv sync` は lock どおり入れるので開発中は見えず、USAGE 2 章が主経路として案内している
   `pip install .` でだけ古い版が入りうる状態だった。下限を lock の版に引き上げ、
   `tests/test_packaging.py` で再発を検出する（lock を上げて pyproject を忘れると落ちる）
-- [ ] 変換ツール用と生成物用の依存の分離（optional extras）— `--auto-fix` が `templates/llm.py` を
-  再利用する関係で現状は混在。分離すると顧客のインストール手順が変わるため保留（docs/tech-stack.md 参照）
+- [~] 変換ツール用と生成物用の依存の分離
+  - [x] **生成物側は `requirements.txt` を出力して伝えるようにした** — `langgraph` /
+    `langchain-core` / `python-dotenv` の 3 つ（空の venv で実測）。提供元 SDK は
+    遅延 import なのでコメントとして併記し、使う 1 つだけ入れれば済む形にした。
+    生成物を単体で動かす `Dockerfile` も出力する（ADR-0008 の amendment）
+  - [ ] 変換ツール側の `pyproject.toml` の分離（optional extras）は保留。`--auto-fix` が
+    `templates/llm.py` を再利用する関係で混在しており、分離すると顧客のインストール手順が
+    変わる
 
 ## LLM opt-in post-processing（任意・ADR-0001）
 

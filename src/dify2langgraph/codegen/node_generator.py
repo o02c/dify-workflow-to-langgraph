@@ -135,7 +135,7 @@ def _generate_node_file(
         *handler.body_imports(node),
     ]
     if uses_env:
-        # env.* are constants in the generated env.py, not state (ADR-0004).
+        # env.* are constants in the generated env.py, not state.
         local_imports.append("from .. import env")
     lines.extend(sorted(local_imports))
 

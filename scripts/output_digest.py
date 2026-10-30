@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stable digest of a generated package, for comparing runs across platforms.
 
-The converter is deterministic (ADR-0001): the same Workflow DSL must produce the
+The converter is deterministic: the same Workflow DSL must produce the
 same bytes whether it ran natively on macOS, natively on Windows, or inside the
 container. Comparing directory trees by hand across machines is awkward, so this
 reduces a generated package to a single hex digest that is trivial to compare.

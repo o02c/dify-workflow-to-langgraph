@@ -7,12 +7,10 @@ can run it without providing a Python 3.13 toolchain of its own. The image is
 against the shipped Dockerfile, so what they run is readable before they run it.
 `scripts/build-release.sh` therefore stages those three files plus `uv.lock`.
 
-**Generated packages get no Dockerfile and no requirements.txt.** They stay plain
-Python sources that run in the destination's existing environment — the output
-contract of [ADR-0007](./0007-generated-output-is-a-self-contained-package.md) is
-unchanged. Containerizing the converter is about *our* toolchain being awkward to
-install on a customer's Windows machine; it says nothing about how the customer
-wants to deploy the workflow we hand them.
+Containerizing the converter is about *our* toolchain being awkward to install on a
+customer's Windows machine; it says nothing about how the customer wants to deploy the
+workflow we hand them. Those are separate questions, and the second one is answered
+separately below.
 
 This is a distribution channel, not a behaviour change: the CLI's defaults are
 identical inside and outside the container.
@@ -141,3 +139,37 @@ also carries a paid-licence threshold that makes it an internal-approval item at
 exactly the customers this was meant to help. Windows customers are pointed at the
 native path (USAGE.md section 8); the image remains the packaged option for macOS
 and Linux, where it is verified.
+
+## Amendment: the generated package does get a requirements.txt and a Dockerfile
+
+The original decision said it got neither, on the grounds that it runs in the
+destination's existing environment. Half of that reasoning was sound and half of it
+left a hole.
+
+The hole: **nothing in the output said what to install.** Measured in an empty
+virtualenv, `python -m <pkg>` fails with
+`ModuleNotFoundError: No module named 'langgraph'`, and the guide said only "run
+`python -m <pkg>`". A recipient had to read the generated imports to find out.
+
+So the output now carries:
+
+- **`requirements.txt`** — `langgraph`, `langchain-core`, `python-dotenv`, and nothing
+  else. That set was measured, not assumed: those three alone run a generated package
+  to completion. Provider SDKs are listed as *comments*, one per `LLM_PROVIDER` value,
+  because `templates/llm.py` imports them inside the function that needs them — so a
+  workflow that calls one model needs one SDK, not four, and a workflow that calls none
+  needs zero. **Unpinned**, because the package is normally dropped into an environment
+  that already has its own versions and a pin would fight that for no benefit.
+- **`Dockerfile`** — for a recipient who would rather not touch their own Python at
+  all. The build context is the package directory, so the generated folder stays one
+  self-contained thing: `cd` into it and `docker build`. `WORKDIR /app` with the package
+  copied to `/app/<pkg>`, because the package is imported by name from its parent
+  (ADR-0007), so the working directory cannot be the package itself.
+
+What ADR-0007's output contract actually requires is that the generated tree be
+self-contained and importable. Telling the recipient what it needs, and offering one
+way to run it without touching their machine, serves that rather than contradicting it.
+
+Verified by building and running a generated package as a container (both a workflow
+with a secret and one without), and by running one in an empty virtualenv with only
+the three requirements installed.

@@ -6,10 +6,10 @@
 #   docker build -t dify2langgraph .
 #
 # This packages the *converter* only. Generated LangGraph packages are plain
-# Python sources meant to run in the destination's own environment (ADR-0007),
-# so nothing here is emitted into the output directory.
+# Python sources meant to run in the destination's own environment, so nothing
+# here is emitted into the output directory.
 #
-# See docs/adr/0008-converter-ships-as-a-docker-image.md and USAGE.md section 9.
+# Usage instructions: USAGE.md, "10. Docker で使う場合".
 
 # --------------------------------------------------------------------------
 # Builder: resolve nothing, install exactly what uv.lock pins.

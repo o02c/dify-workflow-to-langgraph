@@ -8,8 +8,8 @@
     environment-variable syntax, and path separators.
 
     Docker is deliberately out of scope. USAGE.md section 9 is verified on macOS
-    and Linux only; see docs/development.md for why Docker Desktop for Windows
-    cannot be reached from the verification environment.
+    and Linux only: Docker Desktop for Windows needs nested virtualization,
+    which the verification environment cannot provide.
 
     The script installs nothing and changes no machine settings. It writes only
     inside a temporary directory under %TEMP%.
@@ -46,7 +46,7 @@
 .PARAMETER WithLlm
     Also run the G group, which calls a real LLM and therefore costs money and
     needs network access. Off by default: every other check is deterministic,
-    offline and free (ADR-0001). Credentials are read from the environment or
+    offline and free. Credentials are read from the environment or
     from a .env file in RepoRoot; only their names are ever printed.
 
 .PARAMETER LlmProvider
@@ -619,7 +619,7 @@ Invoke-Checked "D2" "No literal ANSI escape codes in captured output" {
 }
 
 # ---------------------------------------------------------------------------
-# F. Generated workflows actually run (ADR-0007)
+# F. Generated workflows actually run
 # ---------------------------------------------------------------------------
 Write-Host "`n=== F. Generated workflows run ===" -ForegroundColor Cyan
 
@@ -655,7 +655,7 @@ function New-InitialStateFile {
             embedded double quotes when handing arguments to a native process.
 
             Generated workflows require their declared inputs under the Start
-            Node's own state key (ADR-0009). Passing nothing used to work only
+            Node's own state key. Passing nothing used to work only
             because the Start Node fabricated placeholders, overwriting whatever
             the caller supplied.
     #>
@@ -693,7 +693,7 @@ if (-not $runtimeDepsOk) {
         }
         $names = @($state.PSObject.Properties.Name)
         $missing = @(@("start_node", "llm_node", "end_node") | Where-Object { $names -notcontains $_ })
-        # The End Node forwards an upstream field rather than a placeholder (ADR-0004).
+        # The End Node forwards an upstream field rather than a placeholder.
         $forwarded = ($state.end_node.result -eq $state.llm_node.text)
         if ($missing.Count -eq 0 -and $forwarded) {
             Add-Result "F1" "A generated linear workflow runs and visits every node" "PASS" `
@@ -704,26 +704,26 @@ if (-not $runtimeDepsOk) {
         }
     }
 
-    Invoke-Checked "F2" "A branching workflow resolves to exactly one branch (ADR-0003)" {
+    Invoke-Checked "F2" "A branching workflow resolves to exactly one branch" {
         $inputs = New-InitialStateFile "f2" `
             '{"node_1722391426202": {"finding": "f", "type": "t", "severity": 1.0}}'
         $r = Invoke-Python @($runPy, $genDir, "guardduty_handler", "--initial-file", $inputs)
         $state = Get-StateJson $r
         if (-not $state) {
-            Add-Result "F2" "A branching workflow resolves to exactly one branch (ADR-0003)" "FAIL" (Get-ErrorDetail $r.Output)
+            Add-Result "F2" "A branching workflow resolves to exactly one branch" "FAIL" (Get-ErrorDetail $r.Output)
             return
         }
         $names = @($state.PSObject.Properties.Name)
         $ends = @("node_1722399235845", "node_1722399356175")
         $reached = @($names | Where-Object { $ends -contains $_ })
         # knowledge-retrieval calls the Retriever port; unconfigured it yields []
-        # so the graph still completes without Dify credentials (ADR-0006).
+        # so the graph still completes without Dify credentials.
         $retrieved = @($state."node_1722397470145".result)
         if ($reached.Count -eq 1 -and $retrieved.Count -eq 0) {
-            Add-Result "F2" "A branching workflow resolves to exactly one branch (ADR-0003)" "PASS" `
+            Add-Result "F2" "A branching workflow resolves to exactly one branch" "PASS" `
                 ("reached {0}; knowledge-retrieval returned []" -f $reached[0])
         } else {
-            Add-Result "F2" "A branching workflow resolves to exactly one branch (ADR-0003)" "FAIL" `
+            Add-Result "F2" "A branching workflow resolves to exactly one branch" "FAIL" `
                 ("branches reached: {0}; retrieval items: {1}" -f $reached.Count, $retrieved.Count)
         }
     }
@@ -869,7 +869,7 @@ if (-not $WithLlm) {
                 return
             }
 
-            # The Start Node is deterministic (ADR-0009): it reads the caller's
+            # The Start Node is deterministic: it reads the caller's
             # declared inputs and raises when a required one is absent, so this
             # needs real input. The LLM never sees that node, so a failure here
             # is a genuine break in an LLM-written body, not a guessed address.
@@ -882,7 +882,7 @@ if (-not $WithLlm) {
                     ("final state keys: " + (@($state.PSObject.Properties.Name) -join ", "))
             } else {
                 # Any other run-time failure is a real result about the opt-in
-                # pass (ADR-0001), not a harness bug.
+                # pass, not a harness bug.
                 Add-Result "G2" "An LLM-implemented workflow runs" "FAIL" `
                     ("the LLM-written body failed at run time:`n" + (Get-ErrorDetail $r.Output))
             }
@@ -936,7 +936,7 @@ if (-not $WithLlm) {
             return
         }
         $text = $state.llm_node.text
-        # The End Node forwards the LLM output rather than a placeholder (ADR-0004).
+        # The End Node forwards the LLM output rather than a placeholder.
         if ($text -and $text -ne "placeholder" -and $state.end_node.result -eq $text) {
             Add-Result "G3" "A generated workflow calls a real model at run time" "PASS" `
                 ("model replied {0}; End forwarded it" -f $text)

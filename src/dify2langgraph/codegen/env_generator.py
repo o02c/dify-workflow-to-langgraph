@@ -1,6 +1,6 @@
 """Generator for the generated package's environment-constants module.
 
-ADR-0004 gives Dify's `env.*` namespace a home *outside* state: the DSL's
+Dify's `env.*` namespace lives *outside* the graph state: the DSL's
 `environment_variables` are constants, not per-run values, so they become module
 constants rather than a `GraphState` key.
 
@@ -44,8 +44,8 @@ def generate_env_file(graph: WorkflowGraph, output_dir: Path) -> bool:
         "",
         "Non-secret values are constants copied from the DSL. Secrets are not: Dify",
         "exports their value in plaintext, so writing it here would put a credential",
-        "into source. They are read from the environment on first access instead",
-        "(ADR-0004).",
+        "into source. They are read from the environment when they are first used",
+        "instead, under the same name the DSL gave them.",
         '"""',
         "",
     ]

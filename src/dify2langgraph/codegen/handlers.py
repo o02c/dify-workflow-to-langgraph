@@ -108,15 +108,15 @@ class NodeHandler:
         }
 
 
-# ADR-0004 reserves a `sys` key in GraphState for Dify's workflow-level runtime
-# inputs. *Which* ones exist is mode-dependent -- `sys.query` is chatflow-only,
+# GraphState reserves a `sys` key for Dify's workflow-level runtime inputs.
+# *Which* ones exist is mode-dependent -- `sys.query` is chatflow-only,
 # while `sys.app_id` / `sys.user_id` appear in workflow mode -- so the generator
 # declares exactly the fields the DSL references rather than a fixed set. Both
 # reference syntaxes arrive here already normalised by the parser into
 # VariableReference(node_id="sys", ...).
 SYS_NAMESPACE = "sys"
-# ADR-0004 puts env *outside* state: the DSL's environment_variables are
-# constants, emitted into a generated env.py module (see env_generator).
+# env lives *outside* state: the DSL's environment_variables are constants,
+# emitted into a generated env.py module (see env_generator).
 ENV_NAMESPACE = "env"
 
 # Each field's *type*, by contrast, is fixed by Dify and not carried in the DSL
@@ -501,11 +501,11 @@ def resolve_selector(
     if from_node:
         key, _ = get_node_names(str(source), node_name_map)
     elif source == SYS_NAMESPACE:
-        # ADR-0004: sys lives in state under its own reserved key.
+        # sys lives in state under its own reserved key.
         key = SYS_NAMESPACE
     elif source == ENV_NAMESPACE:
         # Constants live in the generated env.py, reached as `env.NAME` after
-        # `from .. import env` -- not through state (ADR-0004). The module form is
+        # `from .. import env` -- not through state. The module form is
         # used rather than `from ..env import NAME` so a DSL variable named e.g.
         # `state` or `output` cannot shadow a local.
         #
@@ -709,8 +709,8 @@ class StartHandler(NodeHandler):
         required = [v["variable"] for v in start_variables(node) if v.get("required")]
 
         lines = [
-            "    # Workflow inputs are supplied by the caller in this node's own",
-            "    # state slot (ADR-0009):",
+            "    # Workflow inputs are supplied by the caller under this node's own",
+            "    # key, not at the top level:",
             f'    #     build_graph().invoke({{{json.dumps(key)}: {{...}}}})',
             f"    supplied = state.get({json.dumps(key)}, {{}})",
         ]
@@ -1179,7 +1179,8 @@ def is_branching(node: NodeInfo) -> bool:
     outgoing edge with `sourceHandle: fail-branch` beside the ordinary `source` one,
     and promotes the node to a branch. Without this the generator emitted both as
     unconditional edges, so **the failure path ran even when the node succeeded** --
-    the same bug ADR-0003 exists to prevent, arriving through a different door.
+    the same bug the conditional-edge routing exists to prevent, arriving through a
+    different door.
     """
     return get_handler(node.type).is_branching or uses_fail_branch(node)
 

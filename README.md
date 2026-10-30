@@ -53,12 +53,3 @@ docker build -t dify2langgraph . && docker run --rm \
 MIT License
 
 ---
-
-## 開発者向け
-
-- [docs/OVERVIEW.md](docs/OVERVIEW.md) — トップダウンの全体像（図解つき）
-- [CONTEXT.md](CONTEXT.md) — 用語集（正準）
-- [docs/adr/](docs/adr/) — 設計判断の記録（ADR）
-- [docs/tech-stack.md](docs/tech-stack.md) — 技術スタック（レイヤー別に何をなぜ使うか）
-- [docs/architecture.md](docs/architecture.md) / [docs/development.md](docs/development.md) / [docs/STYLE_GUIDE.md](docs/STYLE_GUIDE.md)
-- [TODO.md](TODO.md) — ロードマップ

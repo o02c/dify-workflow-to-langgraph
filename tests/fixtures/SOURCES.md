@@ -6,12 +6,12 @@ against workflows in the wild (not just hand-written minimal cases).
 ## Hand-written (authored for this repo)
 
 - `simple_workflow.yml` — minimal linear start → llm → end.
-- `ifelse_workflow.yml` — minimal `if-else` with `true`/`false` branches (ADR-0003).
+- `ifelse_workflow.yml` — minimal `if-else` with `true`/`false` branches.
 - `guardduty_handler.yml` — a `question-classifier` branching workflow.
 - `env_sys_workflow.yml` — built in Dify Cloud specifically to pin down shapes no
   other fixture had. Exercises, in one `mode: workflow` export:
   - `environment_variables` with `value_type` `string`, `integer` and **`secret`**
-    (the secret's value is exported in plaintext -- see ADR-0004)
+    (the secret's value is exported in plaintext)
   - both env reference syntaxes: `{{#env.API_BASE#}}` in a prompt, and
     `variable_selector: [env, MAX_RETRY]` in an `if-else` condition
   - `sys.*` in End outputs: `[sys, app_id]` and `[sys, user_id]`
@@ -61,4 +61,4 @@ is not propagated into generated code, so this does not affect what is tested):
   **variable-aggregator**, end. Exercises real conditional branching.
 - `json_translate.yml` — `mode: workflow`; start, code×4, tool, **iteration**
   (+ `iteration-start`), end. Exercises the iteration container shape that
-  ADR-0005 leaves as an open question (currently stubbed via the fallback handler).
+  the converter leaves as an open question (currently stubbed via the fallback handler).

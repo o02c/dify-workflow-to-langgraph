@@ -139,7 +139,8 @@ class WorkflowGraph:
         end_node_ids: IDs of terminal nodes.
         environment_variables: Workflow-level constants declared in the DSL, each
             with ``name``, ``value`` and ``value_type`` (``string`` / ``integer``
-            / ``secret``). Generated as module constants, not state (ADR-0004).
+            / ``secret``). Emitted as module constants rather than per-run state,
+            because they do not vary per run.
     """
 
     nodes: dict[str, NodeInfo]

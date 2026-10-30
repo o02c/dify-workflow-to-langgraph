@@ -145,7 +145,7 @@ class TestGenerateGraphFile:
             assert "graph.add_edge(START," in content
 
     def test_branching_node_uses_conditional_edges(self):
-        """A question-classifier is wired with a router + add_conditional_edges (ADR-0003)."""
+        """A question-classifier is wired with a router + add_conditional_edges."""
         parser = DifyDSLParser()
         graph = parser.parse_file(FIXTURES_DIR / "guardduty_handler.yml")
 
@@ -260,7 +260,7 @@ class TestTranslate:
 
 
 class TestSelfContainedPackage:
-    """The generated output is a package with relative imports (ADR-0007)."""
+    """The generated output is a package with relative imports."""
 
     def test_emits_package_files(self):
         """__init__.py and __main__.py are generated for the output package."""
@@ -314,7 +314,7 @@ class TestStartNodeInputContract:
     """Where a workflow's inputs live is fixed by the generator, not guessed."""
 
     def test_start_body_reads_the_callers_slot(self):
-        """ADR-0002 address, emitted deterministically rather than left to an LLM."""
+        """The canonical state address, emitted deterministically rather than by an LLM."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
             translate(FIXTURES_DIR / "simple_workflow.yml", output_dir)
@@ -461,7 +461,7 @@ class TestRealDslEnvSysWorkflow:
             assert '"random_number": 0.0' in body
 
     def test_sys_selector_resolves_to_the_reserved_key(self):
-        """`[sys, app_id]` reaches `state["sys"]["app_id"]` (ADR-0004)."""
+        """`[sys, app_id]` reaches `state["sys"]["app_id"]`."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
             translate(FIXTURES_DIR / "env_sys_workflow.yml", output_dir)
@@ -545,7 +545,7 @@ class TestRealDslEnvSysWorkflow:
 
 
 class TestEnvConstantsModule:
-    """env.py: DSL constants, with secrets deliberately left out (ADR-0004)."""
+    """env.py: DSL constants, with secrets deliberately left out."""
 
     def _generate(self, tmpdir: str) -> str:
         """Generate the env fixture and return env.py's source."""
@@ -646,7 +646,7 @@ class TestGeneratedOutputIsByteStableAcrossPlatforms:
     """The same DSL must produce the same bytes wherever the converter runs."""
 
     def test_copied_templates_are_normalised_to_lf(self):
-        """A CRLF template must not reach the output (ADR-0001).
+        """A CRLF template must not reach the output.
 
         llm.py and retriever.py are copied into every generated package. A byte
         copy would carry whatever the checkout has, and Git for Windows defaults
@@ -702,7 +702,7 @@ class TestGeneratedOutputIsByteStableAcrossPlatforms:
         assert not offenders, "write_text without newline=: " + ", ".join(offenders)
 
     def test_generated_files_use_lf_line_endings(self):
-        """No CRLF in any generated file, on any host OS (ADR-0001).
+        """No CRLF in any generated file, on any host OS.
 
         Python's text mode rewrites "\n" to ``os.linesep`` unless ``newline`` is
         pinned, so a native Windows run would emit CRLF while the container
@@ -717,8 +717,11 @@ class TestGeneratedOutputIsByteStableAcrossPlatforms:
             output_dir = Path(tmpdir)
             translate(FIXTURES_DIR / "guardduty_handler.yml", output_dir)
 
-            generated = sorted(output_dir.rglob("*.py"))
+            # Every generated file, not only the .py ones: requirements.txt and the
+            # Dockerfile are written the same way and would churn the same way.
+            generated = sorted(p for p in output_dir.rglob("*") if p.is_file())
             assert generated, "fixture produced no files"
+            assert any(p.name == "Dockerfile" for p in generated)
 
             crlf = [p.name for p in generated if b"\r\n" in p.read_bytes()]
             assert not crlf, f"CRLF line endings in: {crlf}"
@@ -789,3 +792,90 @@ class TestGuidanceMatchesGeneratedCode:
 
             assert '# sys.app_id -> state["sys"]["app_id"]' in body
             assert '"app_id": state["sys"]["app_id"],' in body
+
+
+class TestNoPointersOutsideTheDistribution:
+    """Nothing distributed may point at a file that is not distributed.
+
+    What ships is source, build materials, scripts, tests, README.md and USAGE.md.
+    Design records and planning notes stay in this repository, so citing one from a
+    generated comment -- or from a test, or from a verification script's console
+    output -- is a dead end for whoever holds the distributed copy. The comments in
+    generated node bodies are the only instructions they get, which makes it worse
+    there.
+
+    The patterns are assembled from pieces so this file can be checked like any other
+    instead of being excluded from its own rule.
+    """
+
+    # Names of things that exist only in this repository.
+    _CITATION = "ADR" + "-"
+    _OUTSIDE = (
+        "docs" + "/",
+        "CONTEXT" + ".md",
+        "TODO" + ".md",
+        "requirement" + ".md",
+    )
+
+    # Everything scripts/build-release.sh copies into the distributed tree. Listed
+    # explicitly rather than globbed: citations survived a first pass because the check
+    # only looked at src/*.py, while Dockerfile and pyproject.toml ship too.
+    _SHIPPED = (
+        "src/dify2langgraph",
+        "scripts",
+        "tests",
+        "pyproject.toml",
+        "uv.lock",
+        "Dockerfile",
+        ".dockerignore",
+        ".gitattributes",
+        "compose.yaml",
+        "Makefile",
+        "README.md",
+        "USAGE.md",
+    )
+
+    def _offences(self, text: str, label: str) -> list[str]:
+        """Lines in `text` naming something outside the distribution."""
+        found = []
+        for n, line in enumerate(text.splitlines(), 1):
+            if self._CITATION in line or any(name in line for name in self._OUTSIDE):
+                found.append(f"{label}:{n}: {line.strip()}")
+        return found
+
+    def test_generated_packages_point_nowhere_outside(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            for fixture in sorted(FIXTURES_DIR.glob("*.yml")):
+                translate(fixture, output_dir / fixture.stem)
+
+            offenders = [
+                offence
+                for path in sorted(output_dir.rglob("*.py"))
+                for offence in self._offences(
+                    path.read_text(encoding="utf-8"), str(path.relative_to(output_dir))
+                )
+            ]
+
+            assert not offenders, "generated output points outside:\n" + "\n".join(offenders)
+
+    def test_everything_distributed_points_nowhere_outside(self):
+        repo_root = Path(__file__).parent.parent
+
+        offenders = []
+        for target in self._SHIPPED:
+            path = repo_root / target
+            assert path.exists(), f"{target} is listed as distributed but does not exist"
+            files = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
+            for file in files:
+                # The same exclusions scripts/build-release.sh applies after copying,
+                # so this checks exactly the set that ships.
+                if "__pycache__" in file.parts:
+                    continue
+                if file.suffix == ".pyc" or file.name == ".DS_Store":
+                    continue
+                offenders += self._offences(
+                    file.read_text(encoding="utf-8"), str(file.relative_to(repo_root))
+                )
+
+        assert not offenders, "distributed files point outside:\n" + "\n".join(offenders)

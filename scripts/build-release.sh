@@ -2,10 +2,14 @@
 #
 # Build a release archive for external distribution.
 #
-# The archive ships the .py sources as-is (no wheel/sdist build), the Docker
-# packaging (Dockerfile / .dockerignore / compose.yaml / uv.lock), and the
-# user-facing docs only. Developer material (CONTEXT.md, docs/adr, TODO.md,
-# requirement.md, docs/development.md, docs/STYLE_GUIDE.md, tests) is excluded.
+# The archive ships the .py sources as-is (no wheel/sdist build) plus everything
+# needed to build, verify and understand them: build materials, scripts, tests,
+# README.md and USAGE.md.
+#
+# The copy list below is an allowlist. Anything not named stays out, so material
+# that only makes sense inside this repository cannot leak into a release -- and
+# nothing distributed may point at something that did not come along (checked by
+# tests/test_translator.py::TestNoPointersOutsideTheDistribution).
 #
 # Usage:
 #   scripts/build-release.sh [output_dir]
@@ -42,8 +46,14 @@ cp -R "${repo_root}/src/dify2langgraph" "${stage}/src/dify2langgraph"
 find "${stage}/src" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "${stage}/src" -type f \( -name '*.pyc' -o -name '.DS_Store' \) -delete
 
-# 2) Packaging metadata so `pip install .` works without a build step.
+# 2) Build materials. pyproject.toml makes `pip install .` work without a build
+#    step; .python-version and .gitattributes matter on the destination host --
+#    the latter keeps .sh and .py checked out with LF, without which the
+#    verification scripts will not start under Git Bash on Windows.
 cp "${repo_root}/pyproject.toml" "${stage}/pyproject.toml"
+cp "${repo_root}/.python-version" "${stage}/.python-version"
+cp "${repo_root}/.gitattributes" "${stage}/.gitattributes"
+cp "${repo_root}/Makefile" "${stage}/Makefile"
 
 # 3) Docker packaging. uv.lock is required: the image builds with `uv sync
 #    --frozen`, so without the lock the archive cannot be built at all.
@@ -52,12 +62,20 @@ cp "${repo_root}/.dockerignore" "${stage}/.dockerignore"
 cp "${repo_root}/compose.yaml" "${stage}/compose.yaml"
 cp "${repo_root}/uv.lock" "${stage}/uv.lock"
 
-# 4) User-facing docs only. Drop README's trailing "開発者向け" (developer) section,
-#    whose links point at excluded developer docs.
-sed '/^## 開発者向け$/,$d' "${repo_root}/README.md" > "${stage}/README.md"
+# 4) Scripts and tests. The recipient can re-run the verification scripts on their
+#    own host and the test suite against their own workflows, which is the point of
+#    shipping them.
+cp -R "${repo_root}/scripts" "${stage}/scripts"
+cp -R "${repo_root}/tests" "${stage}/tests"
+find "${stage}/scripts" "${stage}/tests" -type d \( -name '__pycache__' -o -name '.pytest_cache' \) -prune -exec rm -rf {} +
+find "${stage}/scripts" "${stage}/tests" -type f \( -name '*.pyc' -o -name '.DS_Store' \) -delete
+
+# 5) Documentation. Both files are written to stand on their own; README.md carries
+#    no developer section, so it is copied whole.
+cp "${repo_root}/README.md" "${stage}/README.md"
 cp "${repo_root}/USAGE.md" "${stage}/USAGE.md"
 
-# 5) Archive.
+# 6) Archive.
 mkdir -p "${out_dir}"
 tar -C "${out_dir}" -czf "${out_dir}/${name}.tar.gz" "${name}"
 

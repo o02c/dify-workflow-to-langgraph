@@ -23,7 +23,7 @@ docker-build:
 
 # Digest of a reference conversion, for comparing against another platform.
 # scripts/verify-windows.ps1 prints the same value on a Windows host; equal digests
-# mean the two runs produced byte-identical output (ADR-0001). Uses --skip-implement
+# mean the two runs produced byte-identical output. Uses --skip-implement
 # so the run is deterministic and needs no credentials.
 verify-digest:
 	@uv run python scripts/output_digest.py tests/fixtures/guardduty_handler.yml
